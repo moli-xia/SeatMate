@@ -3,54 +3,42 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>会议室排座</title>
+  <meta name="theme-color" content="#f0bd45">
+  <meta name="description" content="SeatMate 会议排座工作台：设计会场布局、管理人员名单，轻松安排每一个座位。">
+  <title>SeatMate · 会议排座工作台</title>
   <link rel="icon" type="image/svg+xml" href="assets/app-icon.svg">
   <link rel="apple-touch-icon" href="assets/app-icon.svg">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <div class="app-shell">
-    <header class="topbar">
-      <div class="brand">
-        <img class="brand-icon" src="assets/app-icon.svg" alt="" aria-hidden="true">
-        <div>
-          <input id="roomNameInput" class="room-name-input" type="text" value="未命名会议室" aria-label="会议室名称">
-          <p id="statusLine">正在载入</p>
-        </div>
-      </div>
-      <div class="top-actions">
-        <button class="icon-btn" id="undoBtn" title="撤销" type="button">↶</button>
-        <button class="icon-btn" id="redoBtn" title="重做" type="button">↷</button>
-        <button class="text-btn" id="saveBtn" type="button">保存</button>
-        <button class="text-btn primary" id="exportPngBtn" type="button">导出图片</button>
-        <button class="text-btn" id="exportJsonBtn" title="导出当前布局、名单、座位分配和草稿引用数据，用于备份或下次继续编辑" type="button">导出布局</button>
-        <button class="text-btn" id="importJsonBtn" title="导入之前导出的布局文件，恢复布局、名单和座位分配" type="button">导入布局</button>
-        <input id="projectFile" class="visually-hidden" type="file" accept="application/json,.json">
-      </div>
-    </header>
-
-    <aside class="left-panel">
-      <section class="panel-section">
-        <div class="section-heading">
-          <h2>工具</h2>
-        </div>
-        <div class="tool-grid" id="toolGrid">
-          <button class="tool-btn is-active" data-tool="select" type="button" title="选择和移动">
+<svg class="icon-sprite" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><defs><symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 5 4 10l5 5M4 10h9a6 6 0 0 1 0 12"/></symbol><symbol id="i-redo" viewBox="0 0 24 24"><path d="m15 5 5 5-5 5m5-5h-9a6 6 0 0 0 0 12"/></symbol><symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V3m-5 5 5-5 5 5M4 15v5a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5"/></symbol><symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v13m-5-5 5 5 5-5M4 17v4h16v-4"/></symbol><symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol><symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol><symbol id="i-copy" viewBox="0 0 24 24"><path d="M9 9h12v12H9zM5 15H3V3h12v2"/></symbol><symbol id="i-delete" viewBox="0 0 24 24"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/></symbol><symbol id="i-search" viewBox="0 0 24 24"><path d="M21 21l-5-5M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0"/></symbol><symbol id="i-grid" viewBox="0 0 24 24"><path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/></symbol><symbol id="i-help" viewBox="0 0 24 24"><path d="M9 9a3 3 0 1 1 4 3v3m-1 3h.01M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0"/></symbol><symbol id="i-expand" viewBox="0 0 24 24"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/></symbol><symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol><symbol id="i-people" viewBox="0 0 24 24"><path d="M16 21v-2a5 5 0 0 0-5-5H7a5 5 0 0 0-5 5v2m17-7a5 5 0 0 1 3 5v2M13 6a4 4 0 1 1-8 0 4 4 0 0 1 8 0m4-4a4 4 0 0 1 0 8"/></symbol><symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 21v-7m0-5V3m8 18v-9m0-5V3m8 18v-3m0-5V3M1 9h6m2 3h6m2 6h6"/></symbol><symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol><symbol id="i-image" viewBox="0 0 24 24"><path d="M3 3h18v18H3zM3 17l6-6 4 4 3-3 5 5M7 7h.01"/></symbol><symbol id="i-spark" viewBox="0 0 24 24"><path d="m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5z"/></symbol><symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6h7l2 3h9v12H3z"/></symbol><symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol><symbol id="i-edit" viewBox="0 0 24 24"><path d="m16 3 5 5L8 21H3v-5zM13 6l5 5"/></symbol></defs></svg>
+<div class="app-shell">
+  <header class="topbar">
+    <a class="brand" href="./" aria-label="SeatMate 排座工作台"><img class="brand-icon" src="assets/app-icon.svg" alt=""><span><b>SeatMate<span class="brand-dot">.</span></b><small>让每个人，各就各位</small></span></a>
+    <div class="project-heading"><span class="project-divider"></span><svg class="ui-icon" aria-hidden="true"><use href="#i-folder"/></svg><input id="roomNameInput" class="room-name-input" type="text" value="未命名会议室" maxlength="80" aria-label="会议室名称" title="点击修改会议室名称"><svg class="ui-icon" aria-hidden="true"><use href="#i-edit"/></svg><span id="saveState" class="save-state" role="status">本地保存</span></div>
+    <div class="top-actions">
+      <div class="history-actions"><button class="text-btn history-btn" id="undoBtn" title="上一步 / 撤销 Ctrl+Z" aria-label="上一步" type="button"><svg class="ui-icon" aria-hidden="true"><use href="#i-undo"/></svg><span>上一步</span></button><button class="text-btn history-btn" id="redoBtn" title="下一步 / 重做 Ctrl+Shift+Z" aria-label="下一步" type="button"><svg class="ui-icon" aria-hidden="true"><use href="#i-redo"/></svg><span>下一步</span></button></div>
+      <button class="text-btn save-btn" id="saveBtn" type="button" title="保存 Ctrl+S">保存</button>
+      <details class="file-menu"><summary class="text-btn"><svg class="ui-icon" aria-hidden="true"><use href="#i-folder"/></svg>布局文件<span>⌄</span></summary><div class="menu-popover"><button id="importJsonBtn" type="button"><svg class="ui-icon" aria-hidden="true"><use href="#i-upload"/></svg>导入布局 <small>JSON</small></button><button id="exportJsonBtn" type="button"><svg class="ui-icon" aria-hidden="true"><use href="#i-download"/></svg>导出布局 <small>JSON</small></button></div></details>
+      <button class="text-btn primary" id="exportPngBtn" type="button"><svg class="ui-icon" aria-hidden="true"><use href="#i-download"/></svg><span>导出图片</span></button>
+      <input id="projectFile" class="visually-hidden" type="file" accept="application/json,.json">
+    </div>
+  </header>
+  <aside class="left-panel" id="leftPanel" aria-label="布局工具">
+    <div class="panel-title"><span><svg class="ui-icon" aria-hidden="true"><use href="#i-grid"/></svg>布局与素材</span><span class="eyebrow">WORKSPACE</span></div>
+    <section class="panel-section drawing-section">
+      <div class="section-heading"><h2>绘制工具</h2><span>点击选择</span></div>
+      <div class="tool-grid" id="toolGrid">
+          <button class="tool-btn is-active" data-tool="select" type="button" title="选择、框选和移动 V">
             <span class="tool-icon tool-select"></span><b>选择</b>
           </button>
-          <button class="tool-btn" data-tool="pan" type="button" title="平移画布">
+          <button class="tool-btn" data-tool="pan" type="button" title="平移画布 H">
             <span class="tool-icon tool-pan"></span><b>平移</b>
-          </button>
-          <button class="tool-btn" data-tool="rotate" type="button" title="旋转对象">
-            <span class="tool-icon tool-rotate"></span><b>旋转</b>
-          </button>
-          <button class="tool-btn" data-tool="marquee" type="button" title="框选多个对象">
-            <span class="tool-icon tool-marquee"></span><b>框选</b>
           </button>
           <button class="tool-btn" data-tool="table" type="button" title="绘制桌面">
             <span class="tool-icon tool-table"></span><b>桌面</b>
           </button>
-          <button class="tool-btn" data-tool="shape-rect" type="button" title="绘制矩形">
+          <button class="tool-btn" data-tool="shape-rect" type="button" title="绘制矩形 R">
             <span class="tool-icon tool-rect"></span><b>矩形</b>
           </button>
           <button class="tool-btn" data-tool="shape-roundRect" type="button" title="绘制圆角矩形">
@@ -62,128 +50,77 @@
           <button class="tool-btn" data-tool="shape-triangle" type="button" title="绘制三角形">
             <span class="tool-icon tool-triangle"></span><b>三角</b>
           </button>
-          <button class="tool-btn" data-tool="seat" type="button" title="添加椅子">
+          <button class="tool-btn" data-tool="seat" type="button" title="添加一把椅子 C">
             <span class="tool-icon tool-seat"></span><b>椅子</b>
           </button>
-          <button class="tool-btn" data-tool="label" type="button" title="添加文字">
+          <button class="tool-btn" data-tool="seat-row" type="button" title="拖出一排等距椅子 S">
+            <span class="tool-icon tool-seat-row"></span><b>椅子排</b>
+          </button>
+          <button class="tool-btn" data-tool="label" type="button" title="添加文字 T">
             <span class="tool-icon tool-text"></span><b>文字</b>
           </button>
+          </button>
         </div>
-      </section>
-
-      <section class="panel-section">
-        <div class="section-heading">
-          <h2>草稿</h2>
-        </div>
-        <div class="stack">
-          <button class="wide-btn" id="draftImportBtn" type="button">导入草稿</button>
-          <button class="wide-btn" id="draftAutoBtn" type="button">草稿自动布局</button>
-          <button class="wide-btn" id="draftClearBtn" type="button">清除草稿</button>
-          <input id="draftFile" class="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp,image/gif">
-        </div>
-      </section>
-
-      <section class="panel-section">
-        <div class="section-heading">
-          <h2>视图</h2>
-        </div>
-        <div class="segmented">
-          <button id="zoomOutBtn" type="button">-</button>
-          <button id="fitBtn" type="button">适配</button>
-          <button id="zoomInBtn" type="button">+</button>
-        </div>
-        <label class="check-row">
-          <input id="snapToggle" type="checkbox" checked>
-          <span>网格吸附</span>
-        </label>
-        <label class="check-row">
-          <input id="referenceToggle" type="checkbox" checked>
-          <span>显示参考图</span>
-        </label>
-      </section>
-    </aside>
-
-    <main class="workspace">
-      <div class="canvas-bar">
-        <div>
-          <strong id="canvasTitle">未命名会议室</strong>
-          <span id="selectionHint">未选择对象</span>
-        </div>
-        <div class="canvas-tools">
-          <button class="mini-btn" id="selectAllBtn" type="button">全选</button>
-          <button class="mini-btn" id="rotateLeftBtn" type="button">左转</button>
-          <button class="mini-btn" id="rotateRightBtn" type="button">右转</button>
-          <button class="mini-btn" id="groupBtn" type="button">组合</button>
-          <button class="mini-btn" id="ungroupBtn" type="button">取消组合</button>
-          <button class="mini-btn" id="duplicateBtn" type="button">复制</button>
-          <button class="mini-btn danger" id="deleteBtn" type="button">删除</button>
-          <button class="mini-btn danger" id="clearLayoutBtn" title="清空当前画布布局，名单保留" type="button">清空布局</button>
-        </div>
-      </div>
-
-      <div class="stage-frame">
-        <svg id="stage" viewBox="0 0 1600 1000" aria-label="会议室排座画布">
-          <defs>
-            <pattern id="smallGrid" width="20" height="20" patternUnits="userSpaceOnUse">
-              <path d="M 20 0 L 0 0 0 20" fill="none" stroke="#e7e2d8" stroke-width="1"/>
-            </pattern>
-            <pattern id="grid" width="100" height="100" patternUnits="userSpaceOnUse">
-              <rect width="100" height="100" fill="url(#smallGrid)"/>
-              <path d="M 100 0 L 0 0 0 100" fill="none" stroke="#d2cabd" stroke-width="1.4"/>
-            </pattern>
-            <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
-              <feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#3f3a32" flood-opacity="0.12"/>
-            </filter>
-          </defs>
-          <rect class="stage-bg" x="0" y="0" width="1600" height="1000" fill="url(#grid)"/>
-          <g id="referenceLayer"></g>
-          <g id="itemsLayer"></g>
-          <g id="draftLayer"></g>
-        </svg>
-      </div>
-    </main>
-
-    <aside class="right-panel">
-      <section class="panel-section roster-section">
-        <div class="section-heading">
-          <h2>名单</h2>
-          <span id="rosterCount">0人</span>
-        </div>
-        <div class="roster-controls">
-          <textarea id="peopleInput" rows="5" placeholder="粘贴名单"></textarea>
-          <div class="import-line simple">
-            <button class="mini-btn" id="loadPeopleBtn" type="button">载入</button>
-            <button class="mini-btn" id="peopleFileBtn" type="button">文件</button>
-            <input id="peopleFile" class="visually-hidden" type="file" accept=".csv,.txt,text/csv,text/plain">
-          </div>
-          <input class="search-input" id="personSearch" type="search" placeholder="搜索姓名">
-          <div class="assignment-actions">
-            <button class="mini-btn" id="autoAssignBtn" type="button">自动排</button>
-            <button class="mini-btn" id="clearAssignBtn" type="button">清空座位</button>
-            <button class="mini-btn danger" id="clearPeopleBtn" type="button">清空名单</button>
-          </div>
-        </div>
-        <div class="people-list" id="peopleList"></div>
-      </section>
-
-      <section class="panel-section inspector-section">
-        <div class="section-heading">
-          <h2>属性</h2>
-        </div>
-        <div id="inspector"></div>
-      </section>
-
-      <section class="panel-section reference-section" id="referenceSection">
-        <div class="section-heading">
-          <h2>草稿</h2>
-        </div>
-        <button class="reference-preview" id="referencePreviewBtn" type="button" title="放大查看草稿">
-        <img id="referenceImage" src="assets/draft-placeholder.svg" alt="未导入草稿">
-        </button>
-      </section>
-    </aside>
-  </div>
-
+    </section>
+    <section class="panel-section palette-section"><div class="section-heading"><h2>色板卡</h2><span id="paletteHint">用于新绘制的对象</span></div><div class="palette-targets" role="group" aria-label="着色目标"><button type="button" class="is-active" data-color-target="fill" aria-pressed="true">图形填充</button><button type="button" data-color-target="text" aria-pressed="false">文字颜色</button></div><div class="color-swatches"><button class="color-swatch" type="button" data-color="#edbe4c" aria-label="明黄色" title="明黄色 #edbe4c" style="--swatch:#edbe4c"></button><button class="color-swatch" type="button" data-color="#e9c89a" aria-label="原木色" title="原木色 #e9c89a" style="--swatch:#e9c89a"></button><button class="color-swatch" type="button" data-color="#c18b54" aria-label="胡桃色" title="胡桃色 #c18b54" style="--swatch:#c18b54"></button><button class="color-swatch" type="button" data-color="#ad6252" aria-label="陶土红" title="陶土红 #ad6252" style="--swatch:#ad6252"></button><button class="color-swatch" type="button" data-color="#738e78" aria-label="鼠尾草绿" title="鼠尾草绿 #738e78" style="--swatch:#738e78"></button><button class="color-swatch" type="button" data-color="#758ca6" aria-label="雾蓝色" title="雾蓝色 #758ca6" style="--swatch:#758ca6"></button><button class="color-swatch" type="button" data-color="#8f739c" aria-label="浅紫色" title="浅紫色 #8f739c" style="--swatch:#8f739c"></button><button class="color-swatch" type="button" data-color="#544335" aria-label="深棕色" title="深棕色 #544335" style="--swatch:#544335"></button><button class="color-swatch" type="button" data-color="#ffffff" aria-label="白色" title="白色 #ffffff" style="--swatch:#ffffff"></button><button class="color-swatch" type="button" data-color="#ddd4c4" aria-label="暖灰色" title="暖灰色 #ddd4c4" style="--swatch:#ddd4c4"></button></div><label class="custom-color-row"><span>自定义颜色</span><input id="customColor" type="color" value="#edbe4c" aria-label="自定义颜色"><span id="colorValue">#EDBE4C</span></label><label class="check-row"><input id="snapTablesToggle" type="checkbox" checked><span>座椅自动贴合桌边</span></label></section>
+    <section class="panel-section template-section"><details>
+      <summary class="section-heading"><h2>快速布局</h2><span>展开模板 ⌄</span></summary>
+      <p class="section-description">选一个模板，再调整成你的会场。</p>
+      <div class="template-list"><button class="template-card" data-template="boardroom" type="button"><span class="template-thumb boardroom" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></span><span><b>围桌会议</b><small>16 座 · 讨论 / 洽谈</small></span><svg class="ui-icon" aria-hidden="true"><use href="#i-chevron"/></svg></button><button class="template-card" data-template="classroom" type="button"><span class="template-thumb classroom" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></span><span><b>课堂培训</b><small>24 座 · 培训 / 分享</small></span><svg class="ui-icon" aria-hidden="true"><use href="#i-chevron"/></svg></button><button class="template-card" data-template="banquet" type="button"><span class="template-thumb banquet" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></span><span><b>圆桌交流</b><small>24 座 · 交流 / 宴会</small></span><svg class="ui-icon" aria-hidden="true"><use href="#i-chevron"/></svg></button></div>
+    </details></section>
+    <section class="panel-section draft-section">
+      <details><summary class="section-heading"><h2><svg class="ui-icon" aria-hidden="true"><use href="#i-image"/></svg>草稿参考</h2><span>⌄</span></summary>
+        <p class="section-description">导入手绘图，辅助还原会场。</p>
+        <div class="stack"><button class="wide-btn" id="draftImportBtn" type="button"><svg class="ui-icon" aria-hidden="true"><use href="#i-upload"/></svg>导入草稿</button><div class="two-columns"><button class="mini-btn" id="draftAutoBtn" type="button">自动识别</button><button class="mini-btn danger" id="draftClearBtn" type="button">清除</button></div><input id="draftFile" class="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp,image/gif"></div>
+        <label class="check-row"><input id="referenceToggle" type="checkbox"><span>显示参考图</span></label>
+      </details>
+    </section>
+    <div class="left-footer"><span class="privacy-dot"></span>自动保存在此浏览器<button class="icon-btn" id="helpBtn" type="button" title="操作指南与快捷键" aria-label="操作指南与快捷键"><svg class="ui-icon" aria-hidden="true"><use href="#i-help"/></svg></button></div>
+  </aside>
+  <main class="workspace">
+    <div class="workspace-heading"><div><div class="eyebrow">SEATING PLAN</div><div class="title-line"><h1 id="canvasTitle">未命名会议室</h1><button class="icon-btn" id="renameRoomBtn" type="button" title="重命名会议室" aria-label="重命名会议室"><svg class="ui-icon" aria-hidden="true"><use href="#i-edit"/></svg></button></div></div><button class="text-btn focus-btn" id="focusBtn" type="button" aria-pressed="false" title="收起侧栏，专注画布"><svg class="ui-icon" aria-hidden="true"><use href="#i-expand"/></svg><span>专注模式</span></button></div>
+    <div class="canvas-bar"><span class="canvas-label"><svg class="ui-icon" aria-hidden="true"><use href="#i-grid"/></svg>会场平面图</span><div class="canvas-tools">
+      <button class="mini-btn" id="selectAllBtn" type="button" title="全选 Ctrl+A">全选</button>
+      <button class="icon-btn" id="rotateLeftBtn" type="button" title="逆时针旋转 90° [" aria-label="逆时针旋转90度"><svg class="ui-icon" aria-hidden="true"><use href="#i-undo"/></svg></button><button class="icon-btn" id="rotateRightBtn" type="button" title="顺时针旋转 90° ]" aria-label="顺时针旋转90度"><svg class="ui-icon" aria-hidden="true"><use href="#i-redo"/></svg></button>
+      <span class="toolbar-divider"></span><button class="mini-btn" id="groupBtn" type="button">组合</button><button class="mini-btn" id="ungroupBtn" type="button">解组</button>
+      <button class="icon-btn" id="duplicateBtn" type="button" title="复制 Ctrl+D" aria-label="复制"><svg class="ui-icon" aria-hidden="true"><use href="#i-copy"/></svg></button><button class="icon-btn danger" id="deleteBtn" type="button" title="删除 Delete" aria-label="删除"><svg class="ui-icon" aria-hidden="true"><use href="#i-delete"/></svg></button>
+      <button class="mini-btn" id="editPropertiesBtn" type="button">属性</button>
+      <span class="toolbar-divider"></span><button class="icon-btn danger" id="clearLayoutBtn" type="button" title="清空布局，保留名单" aria-label="清空布局"><svg class="ui-icon" aria-hidden="true"><use href="#i-close"/></svg></button>
+    </div></div>
+    <div class="stage-frame">
+      <svg id="stage" viewBox="0 0 1600 1000" aria-label="会议室排座画布" tabindex="0">
+        <defs><pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="0.85" fill="#e6d8bd"/></pattern><filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="4" stdDeviation="5" flood-color="#865719" flood-opacity="0.06"/></filter></defs>
+        <rect class="stage-bg" x="-16000" y="-10000" width="32000" height="20000" fill="url(#grid)"/>
+        <rect class="room-boundary" x="0" y="0" width="1600" height="1000" rx="4"/>
+        <g id="referenceLayer"></g><g id="itemsLayer"></g><g id="draftLayer"></g>
+      </svg>
+      <div class="canvas-empty" id="canvasEmpty"><div class="empty-art" aria-hidden="true"><div class="empty-table"></div><i></i><i></i><i></i><i></i><i></i><i></i><span>+</span></div><span class="eyebrow">A PLACE FOR EVERYONE</span><h2>从一张好布局开始</h2><p>选择模板快速搭建会场，<br>或使用左侧工具，自由绘制你的想法。</p><button class="text-btn primary" data-template="boardroom" type="button"><svg class="ui-icon" aria-hidden="true"><use href="#i-plus"/></svg>创建围桌会议</button><button class="blank-start" id="blankStartBtn" type="button">从空白画布开始 <svg class="ui-icon" aria-hidden="true"><use href="#i-chevron"/></svg></button></div>
+      <div class="canvas-overlay-top"><span class="canvas-chip"><svg class="ui-icon" aria-hidden="true"><use href="#i-grid"/></svg>自由画布 <span>1600 × 1000</span></span></div>
+      <div class="canvas-bottom"><div class="mobile-history"><button class="icon-btn" data-history="undo" type="button" aria-label="上一步"><svg class="ui-icon" aria-hidden="true"><use href="#i-undo"/></svg><span>上一步</span></button><button class="icon-btn" data-history="redo" type="button" aria-label="下一步"><svg class="ui-icon" aria-hidden="true"><use href="#i-redo"/></svg><span>下一步</span></button></div><span class="canvas-tip" id="toolHint">拖动选择区域 · 滚轮缩放 · 空格平移</span><div class="zoom-control"><button id="zoomOutBtn" type="button" title="缩小" aria-label="缩小"><svg class="ui-icon" aria-hidden="true"><use href="#i-minus"/></svg></button><span id="zoomValue">100%</span><button id="zoomInBtn" type="button" title="放大" aria-label="放大"><svg class="ui-icon" aria-hidden="true"><use href="#i-plus"/></svg></button><span class="toolbar-divider"></span><button id="fitBtn" type="button" title="适配画布 F" aria-label="适配画布"><svg class="ui-icon" aria-hidden="true"><use href="#i-expand"/></svg></button></div></div>
+    </div>
+    <footer class="canvas-status"><div><span class="legend-dot"></span><span id="statusLine">正在载入</span></div><span id="selectionHint">未选择对象</span><label class="check-row"><input id="snapToggle" type="checkbox" checked><span>网格吸附</span></label></footer>
+  </main>
+  <aside class="right-panel" id="rightPanel" aria-label="名单与属性">
+    <div class="panel-tabs" role="tablist" aria-label="侧栏内容"><button id="rosterTab" class="is-active" role="tab" aria-selected="true" aria-controls="rosterPanel" data-panel="roster" type="button"><svg class="ui-icon" aria-hidden="true"><use href="#i-people"/></svg>人员名单<span id="rosterCount">0</span></button><button id="inspectorTab" role="tab" aria-selected="false" aria-controls="inspectorPanel" data-panel="inspector" type="button"><svg class="ui-icon" aria-hidden="true"><use href="#i-sliders"/></svg>对象属性</button></div>
+    <section class="panel-section roster-section" id="rosterPanel" role="tabpanel" aria-labelledby="rosterTab">
+      <div class="section-heading"><h2>排座概览</h2><span id="progressText">尚未添加人员</span></div>
+      <div class="roster-stats"><div><strong id="totalPeople">0</strong><span>人员 / 单位</span></div><div><strong id="assignedPeople">0</strong><span>已入座</span></div><div><strong id="pendingPeople">0</strong><span>待安排</span></div></div>
+      <div class="progress-track" role="progressbar" aria-label="排座进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="assignmentProgress"></div></div>
+      <details class="roster-import" id="rosterImport" open><summary><svg class="ui-icon" aria-hidden="true"><use href="#i-plus"/></svg>添加人员 / 单位<span>⌄</span></summary><div class="roster-controls"><label class="visually-hidden" for="peopleInput">人员或单位名单</label><textarea id="peopleInput" rows="3" placeholder="粘贴会议名单，每行一位，例如
+黄  成  市水路建设养护发展中心港口科科长"></textarea><div class="import-line simple"><button class="mini-btn primary" id="loadPeopleBtn" type="button">添加到名单</button><button class="mini-btn" id="peopleFileBtn" type="button"><svg class="ui-icon" aria-hidden="true"><use href="#i-upload"/></svg>导入文件</button><input id="peopleFile" class="visually-hidden" type="file" accept=".csv,.txt,text/csv,text/plain"></div><p class="field-help">整行粘贴会自动分出姓名和单位，职务不计入；也支持顿号、逗号分隔的纯名单和 TXT / CSV</p></div></details>
+      <div class="roster-list-heading"><h2>参会名单</h2><select id="rosterFilter" aria-label="筛选排座状态"><option value="all">全部人员</option><option value="pending">待安排</option><option value="assigned">已入座</option></select></div>
+      <div class="search-field"><svg class="ui-icon" aria-hidden="true"><use href="#i-search"/></svg><input class="search-input" id="personSearch" type="search" placeholder="搜索姓名或单位" aria-label="搜索姓名或单位"><kbd>/</kbd></div>
+      <div class="roster-columns" aria-hidden="true"><span>姓名</span><span>单位</span></div>
+      <div class="people-list" id="peopleList"></div>
+      <p class="field-help roster-tip">点姓名用姓名排座，点单位用单位名称排座；拖动同理。点“改”可修改这两列。</p>
+      <div class="assignment-actions"><button class="wide-btn primary" id="autoAssignBtn" type="button"><svg class="ui-icon" aria-hidden="true"><use href="#i-spark"/></svg>一键自动排座</button><div class="two-columns"><button class="mini-btn" id="clearAssignBtn" type="button">重置排座</button><button class="mini-btn danger" id="clearPeopleBtn" type="button">清空名单</button></div></div>
+    </section>
+    <section class="panel-section inspector-section" id="inspectorPanel" role="tabpanel" aria-labelledby="inspectorTab" hidden><div class="section-heading"><h2>对象属性</h2><span>精细调整</span></div><div id="inspector"></div></section>
+    <section class="panel-section reference-section" id="referenceSection"><div class="section-heading"><h2>草稿预览</h2><span>点击放大</span></div><button class="reference-preview" id="referencePreviewBtn" type="button" title="放大查看草稿"><img id="referenceImage" src="assets/draft-placeholder.svg" alt="未导入草稿"></button></section>
+    <div class="right-footer"><svg class="ui-icon" aria-hidden="true"><use href="#i-check"/></svg>布局与名单仅存储在你的浏览器中</div>
+  </aside>
+  <nav class="mobile-nav" aria-label="工作区切换"><button data-mobile-panel="left" type="button"><svg class="ui-icon" aria-hidden="true"><use href="#i-grid"/></svg>布局工具</button><button data-mobile-panel="canvas" class="is-active" type="button"><svg class="ui-icon" aria-hidden="true"><use href="#i-expand"/></svg>会场画布</button><button data-mobile-panel="right" type="button"><svg class="ui-icon" aria-hidden="true"><use href="#i-people"/></svg>名单 / 属性</button></nav>
+</div>
   <div class="draft-viewer" id="draftViewer" aria-hidden="true">
     <div class="draft-viewer-bar">
       <strong id="draftViewerTitle">草稿</strong>
@@ -199,6 +136,11 @@
     </div>
   </div>
 
-  <script src="app.js"></script>
+
+<dialog id="appDialog" class="app-dialog" aria-labelledby="dialogTitle"><form method="dialog"><div class="dialog-heading"><span class="dialog-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-grid"/></svg></span><button class="icon-btn" value="cancel" aria-label="关闭" type="submit"><svg class="ui-icon" aria-hidden="true"><use href="#i-close"/></svg></button></div><h2 id="dialogTitle"></h2><p id="dialogMessage"></p><div id="dialogContent"></div><div class="dialog-actions"><button class="text-btn" value="cancel" id="dialogCancel">取消</button><button class="text-btn primary" value="confirm" id="dialogConfirm">确定</button></div></form></dialog>
+<div class="toast" id="toast" role="status" aria-live="polite" hidden><svg class="ui-icon" aria-hidden="true"><use href="#i-check"/></svg><span id="toastMessage"></span><button id="toastUndo" type="button" hidden>撤销</button><button id="toastClose" type="button" aria-label="关闭提示"><svg class="ui-icon" aria-hidden="true"><use href="#i-close"/></svg></button></div>
+<script src="editor-core.js"></script>
+<script src="project-format.js"></script>
+<script src="app.js"></script>
 </body>
 </html>

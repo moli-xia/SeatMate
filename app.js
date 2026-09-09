@@ -1,20 +1,22 @@
 (() => {
   const SVG_NS = "http://www.w3.org/2000/svg";
-  const STORAGE_KEY = "tableset.meeting.layout.v3";
+  const STORAGE_KEY = "seatmate.meeting.layout.v3";
+  const LEGACY_STORAGE_KEY = "tableset.meeting.layout.v3";
   const DRAFT_PLACEHOLDER = "assets/draft-placeholder.svg";
   const WORKSPACE = { width: 1600, height: 1000 };
-  const PALETTE = [
-    "#f2c46f",
-    "#7ab0a5",
-    "#e9896a",
-    "#8ebd6b",
-    "#8da6d9",
-    "#c39bd3",
-    "#e1a85b",
-    "#78a1bb",
-    "#d77b91",
-    "#a5b56d"
-  ];
+  const PALETTE = ["#f1dba3", "#efd0ad", "#e9d4bd", "#f4dfa6", "#e4caa8", "#edcfb5", "#f2e4c9", "#dbc6a5", "#eed1bc", "#e6d9b5"];
+
+
+  // Locally installed families only, so a layout renders and exports the same without any web font.
+  const FONT_STACKS = {
+    sans: '"Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif',
+    hei: '"SimHei", "Heiti SC", "Noto Sans CJK SC", "Arial Black", sans-serif',
+    song: '"SimSun", "Songti SC", "Source Han Serif SC", Georgia, serif',
+    kai: '"KaiTi", "Kaiti SC", STKaiti, "Segoe Script", serif'
+  };
+  const FONT_LABELS = { sans: "默认（雅黑）", hei: "黑体", song: "宋体", kai: "楷体" };
+  const fontStack = family => FONT_STACKS[family] || FONT_STACKS.sans;
+
 
   const els = {
     stage: document.querySelector("#stage"),
@@ -74,6 +76,14 @@
     inspector: document.querySelector("#inspector")
   };
 
+  const ui = Object.fromEntries(["canvasEmpty", "blankStartBtn", "zoomValue", "saveState", "toolHint", "totalPeople", "assignedPeople", "pendingPeople", "assignmentProgress", "progressText", "rosterFilter", "rosterImport", "rosterPanel", "inspectorPanel", "editPropertiesBtn", "focusBtn", "helpBtn", "appDialog", "dialogTitle", "dialogMessage", "dialogContent", "dialogCancel", "dialogConfirm", "toast", "toastMessage", "toastUndo", "toastClose", "paletteHint", "customColor", "colorValue", "snapTablesToggle"].map(id => [id, document.getElementById(id)]));
+  const textMeasureContext = document.createElement("canvas").getContext("2d");
+  let colorTarget = "fill";
+  let dismissedEmpty = false;
+  let spaceTool = null;
+  let toastTimer = null;
+  let rosterDrag = null;
+  let suppressRosterClickUntil = 0;
   let state = loadState() || createInitialState();
   let currentTool = "select";
   let action = null;
@@ -85,8 +95,400 @@
 
   normalizeState();
   bindEvents();
+  bindWorkspaceEvents();
   renderAll();
+  new ResizeObserver(entries => { if (entries[0].contentRect.width > 0) renderStage(); }).observe(els.stage);
   saveLocal();
+
+  function bindWorkspaceEvents() {
+    ui.rosterImport.open = !state.people.length;
+    document.querySelectorAll("[data-color-target]").forEach(button => button.addEventListener("click", () => { colorTarget = button.dataset.colorTarget; renderPalette(); }));
+    document.querySelectorAll("[data-color]").forEach(button => button.addEventListener("click", () => applyPaletteColor(button.dataset.color)));
+    let colorEditStarted = false;
+    ui.customColor.addEventListener("input", () => {
+      if (!colorEditStarted && getSelectedIds().length) commitHistory();
+      colorEditStarted = true; applyPaletteColor(ui.customColor.value, false);
+    });
+    ui.customColor.addEventListener("change", () => { colorEditStarted = false; });
+    ui.snapTablesToggle.addEventListener("change", () => { state.settings.snapTables = ui.snapTablesToggle.checked; scheduleSave(); });
+    els.peopleList.addEventListener("pointerdown", onPeoplePointerDown);
+    document.addEventListener("pointermove", onPeoplePointerMove);
+    document.addEventListener("pointerup", event => finishPeoplePointer(event, false));
+    document.addEventListener("pointercancel", event => finishPeoplePointer(event, true));
+    document.querySelectorAll("[data-history]").forEach(button => button.addEventListener("click", button.dataset.history === "undo" ? undo : redo));
+    document.querySelector("#renameRoomBtn").addEventListener("click", async () => {
+      if (!await openDialog("为会场起个名字", "一个清晰的名称，让布局更容易查找和分享。", { input: state.title, confirm: "保存名称" })) return;
+      // Another dialog may have taken over the shared content area before this one resolved.
+      const title = (ui.dialogContent.querySelector("input")?.value || "").trim().slice(0, 80);
+      if (!title || title === state.title) return;
+      commitHistory(); state.title = title; renderAll(); scheduleSave();
+    });
+    document.querySelectorAll("[data-template]").forEach(button => button.addEventListener("click", () => applyTemplate(button.dataset.template)));
+    document.querySelectorAll("[data-panel]").forEach(button => button.addEventListener("click", () => switchPanel(button.dataset.panel)));
+    document.querySelectorAll("[data-mobile-panel]").forEach(button => button.addEventListener("click", () => showMobilePanel(button.dataset.mobilePanel)));
+    ui.blankStartBtn.addEventListener("click", () => { dismissedEmpty = true; setTool("table"); els.stage.focus(); });
+    ui.rosterFilter.addEventListener("change", renderPeople);
+    ui.editPropertiesBtn.addEventListener("click", () => { switchPanel("inspector"); showMobilePanel("right"); });
+    ui.focusBtn.addEventListener("click", () => {
+      const focused = document.querySelector(".app-shell").classList.toggle("is-focused");
+      ui.focusBtn.setAttribute("aria-pressed", String(focused));
+      ui.focusBtn.querySelector("span").textContent = focused ? "退出专注" : "专注模式";
+    });
+    ui.helpBtn.addEventListener("click", showHelp);
+    ui.toastClose.addEventListener("click", () => { ui.toast.hidden = true; });
+    ui.toastUndo.addEventListener("click", () => { undo(); ui.toast.hidden = true; });
+    document.addEventListener("click", event => {
+      const menu = document.querySelector(".file-menu");
+      if (!menu.contains(event.target) || event.target.closest(".menu-popover button")) menu.open = false;
+    });
+    document.addEventListener("keyup", event => { if (event.code === "Space") releasePan(); });
+    window.addEventListener("blur", releasePan);
+    window.addEventListener("pagehide", saveLocal);
+    document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") saveLocal(); });
+    els.stage.addEventListener("dblclick", event => {
+      const node = event.target.closest("[data-id]");
+      if (!node || currentTool !== "select") return;
+      setSelection([node.dataset.id]); renderAll(); switchPanel("inspector"); showMobilePanel("right");
+      els.inspector.querySelector("input,textarea,select")?.focus();
+    });
+    els.stage.addEventListener("dragleave", event => {
+      if (!els.stage.contains(event.relatedTarget)) els.stage.querySelectorAll(".is-drop-target").forEach(node => node.classList.remove("is-drop-target"));
+    });
+    document.addEventListener("dragend", () => els.stage.querySelectorAll(".is-drop-target").forEach(node => node.classList.remove("is-drop-target")));
+    els.toolGrid.addEventListener("click", event => { if (event.target.closest("[data-tool]")) { showMobilePanel("canvas"); els.stage.focus(); } });
+    setTool("select");
+  }
+
+  function releasePan() {
+    if (spaceTool === null) return;
+    const previous = spaceTool;
+    spaceTool = null;
+    setTool(previous);
+  }
+
+  function onPeoplePointerDown(event) {
+    if (event.button !== 0 || event.target.closest("button")) return;
+    const card = event.target.closest("[data-person-id]");
+    if (!card) return;
+    const field = event.target.closest("[data-assign-field]")?.dataset.assignField || "name";
+    rosterDrag = { personId: card.dataset.personId, field, x: event.clientX, y: event.clientY, pointerId: event.pointerId, ghost: null };
+  }
+
+  function onPeoplePointerMove(event) {
+    if (!rosterDrag || event.pointerId !== rosterDrag.pointerId) return;
+    if (!rosterDrag.ghost) {
+      if (Math.hypot(event.clientX - rosterDrag.x, event.clientY - rosterDrag.y) < 6) return;
+      // Leave vertical touch gestures available for scrolling the roster.
+      if (event.pointerType === "touch" && Math.abs(event.clientY - rosterDrag.y) > Math.abs(event.clientX - rosterDrag.x)) return;
+      rosterDrag.ghost = document.createElement("div");
+      rosterDrag.ghost.className = "person-drag-ghost";
+      const dragged = getPerson(rosterDrag.personId);
+      rosterDrag.ghost.textContent = (rosterDrag.field === "unit" && dragged?.unit) || dragged?.name || "";
+      document.body.append(rosterDrag.ghost);
+      els.peopleList.setPointerCapture(event.pointerId);
+    }
+    event.preventDefault();
+    rosterDrag.ghost.style.left = `${event.clientX + 14}px`;
+    rosterDrag.ghost.style.top = `${event.clientY + 14}px`;
+    els.stage.querySelectorAll(".is-drop-target").forEach(node => node.classList.remove("is-drop-target"));
+    document.elementFromPoint(event.clientX, event.clientY)?.closest("[data-seat-id]")?.classList.add("is-drop-target");
+  }
+
+  function finishPeoplePointer(event, cancelled) {
+    if (!rosterDrag || event.pointerId !== rosterDrag.pointerId) return;
+    const drag = rosterDrag;
+    rosterDrag = null;
+    if (els.peopleList.hasPointerCapture(event.pointerId)) els.peopleList.releasePointerCapture(event.pointerId);
+    drag.ghost?.remove();
+    els.stage.querySelectorAll(".is-drop-target").forEach(node => node.classList.remove("is-drop-target"));
+    if (!drag.ghost) return;
+    suppressRosterClickUntil = Date.now() + 350;
+    if (cancelled) return;
+    const seatNode = document.elementFromPoint(event.clientX, event.clientY)?.closest("[data-seat-id]");
+    const person = getPerson(drag.personId);
+    if (!seatNode || !person) { showToast("请将姓名拖到一个座位上"); return; }
+    if (person.assignedSeatId === seatNode.dataset.seatId) return;
+    commitHistory();
+    assignPersonToSeat(person.id, seatNode.dataset.seatId, drag.field);
+    setSelection([seatNode.dataset.seatId]);
+    renderAll(); scheduleSave();
+    showToast(`已将 ${seatPersonText(getItem(seatNode.dataset.seatId))} 安排到 ${seatLabel(seatNode.dataset.seatId)}`, true);
+  }
+
+  function switchPanel(panel) {
+    ui.rosterPanel.hidden = panel !== "roster";
+    ui.inspectorPanel.hidden = panel !== "inspector";
+    document.querySelectorAll("[data-panel]").forEach(button => {
+      button.classList.toggle("is-active", button.dataset.panel === panel);
+      button.setAttribute("aria-selected", String(button.dataset.panel === panel));
+    });
+  }
+
+  function showMobilePanel(panel) {
+    document.querySelector(".app-shell").dataset.mobile = panel;
+    document.querySelectorAll("[data-mobile-panel]").forEach(button => {
+      button.classList.toggle("is-active", button.dataset.mobilePanel === panel);
+      button.setAttribute("aria-current", button.dataset.mobilePanel === panel ? "page" : "false");
+    });
+    if (panel === "canvas") renderStage();
+  }
+
+  function showToast(message, reversible = false) {
+    clearTimeout(toastTimer);
+    ui.toastMessage.textContent = message;
+    ui.toastUndo.hidden = !reversible || !history.length;
+    ui.toast.hidden = false;
+    toastTimer = window.setTimeout(() => { ui.toast.hidden = true; }, reversible ? 6500 : 4500);
+  }
+
+  function openDialog(title, message, options = {}) {
+    if (ui.appDialog.open) return Promise.resolve(false);
+    ui.dialogTitle.textContent = title;
+    ui.dialogMessage.textContent = message;
+    ui.dialogContent.replaceChildren();
+    ui.dialogCancel.hidden = !!options.info;
+    ui.dialogConfirm.textContent = options.confirm || "确定";
+    if (options.input !== undefined) {
+      const input = document.createElement("input");
+      input.className = "dialog-text-input"; input.value = options.input; input.maxLength = 200;
+      input.setAttribute("aria-label", "文字内容");
+      input.addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); ui.dialogConfirm.click(); } });
+      ui.dialogContent.append(input);
+    }
+    if (options.fields) options.fields.forEach(field => {
+      const row = document.createElement("label");
+      row.className = "dialog-field";
+      const caption = document.createElement("span");
+      caption.textContent = field.label;
+      const input = document.createElement("input");
+      input.className = "dialog-text-input";
+      input.value = field.value || "";
+      input.maxLength = 200;
+      input.dataset.field = field.key;
+      input.addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); ui.dialogConfirm.click(); } });
+      row.append(caption, input);
+      ui.dialogContent.append(row);
+    });
+    if (options.shortcuts) options.shortcuts.forEach(([label, shortcut]) => {
+      const row = document.createElement("div"); row.className = "shortcut-row";
+      const text = document.createElement("span"); text.textContent = label;
+      const key = document.createElement("kbd"); key.textContent = shortcut;
+      row.append(text, key); ui.dialogContent.append(row);
+    });
+    const previousFocus = document.activeElement;
+    ui.appDialog.returnValue = "cancel";
+    return new Promise(resolve => {
+      let settled = false;
+      // Resolve from the buttons as well as from "close": some engines never deliver the close
+      // event when a dialog form submits, which would leave every caller waiting forever.
+      const finish = confirmed => {
+        if (settled) return;
+        settled = true;
+        ui.appDialog.removeEventListener("click", onDialogClick);
+        ui.appDialog.removeEventListener("cancel", onCancel);
+        ui.appDialog.removeEventListener("close", onClose);
+        if (ui.appDialog.open) ui.appDialog.close(confirmed ? "confirm" : "cancel");
+        previousFocus?.focus({ preventScroll: true });
+        resolve(confirmed);
+      };
+      const onDialogClick = event => {
+        const button = event.target.closest("button[value]");
+        if (button) finish(button.value === "confirm");
+      };
+      const onCancel = () => finish(false);
+      const onClose = () => finish(ui.appDialog.returnValue === "confirm");
+      ui.appDialog.addEventListener("click", onDialogClick);
+      ui.appDialog.addEventListener("cancel", onCancel);
+      ui.appDialog.addEventListener("close", onClose);
+      ui.appDialog.showModal();
+      const input = ui.dialogContent.querySelector("input");
+      if (input) { input.focus(); input.select(); }
+      else (options.info ? ui.dialogConfirm : ui.dialogCancel).focus();
+    });
+  }
+
+  function showHelp() {
+    openDialog("更顺手地安排每一席", "先选模板或绘制桌椅，再添加名单；拖动姓名到座位，或一键自动排座。双击对象可以编辑属性。", {
+      info: true, confirm: "开始排座", shortcuts: [
+        ["选择 / 平移", "V / H"], ["椅子 / 椅子排", "C / S"], ["矩形 / 文字", "R / T"],
+        ["临时平移 / 适配画布", "按住空格 / F"], ["追加多选", "Shift + 点击"],
+        ["朝向上 / 右 / 下 / 左", "↑ 0° / → 90° / ↓ 180° / ← 270°"], ["复制 / 撤销 / 保存", "Ctrl + D / Z / S"],
+        ["搜索名单 / 关闭操作", "/ / Esc"]
+      ]
+    });
+  }
+
+  async function applyTemplate(kind) {
+    const titles = { boardroom: "围桌会议", classroom: "课堂培训", banquet: "圆桌交流" };
+    if (!titles[kind]) return;
+    if ((state.items.length || state.draftImage) && !await openDialog(`使用${titles[kind]}模板？`, "当前布局会替换为新模板，名单会保留，人员需要重新排座。你可以随时撤销。", { confirm: "应用模板" })) return;
+    const items = [];
+    let seatNumber = 0;
+    const seat = (x, y, rotation = 0, w = 120, h = 80) => {
+      items.push(createSeat(x, y, `S${String(++seatNumber).padStart(2, "0")}`, rotation, w, h));
+    };
+    const heading = createLabel(690, 125, titles[kind], 26);
+    items.push(heading);
+    if (kind === "boardroom") {
+      items.push(createTable(400, 335, 800, 300, "会议桌", "#ebce92"));
+      for (let i = 0; i < 6; i++) { seat(409 + i * 132, 245, 180); seat(409 + i * 132, 650); }
+      for (let i = 0; i < 2; i++) { seat(275, 370 + i * 140, 90); seat(1205, 370 + i * 140, -90); }
+      items.push(createLabel(729, 826, "主入口", 17));
+    } else if (kind === "classroom") {
+      items.push(createTable(600, 225, 400, 60, "讲台", "#e8d3a9"));
+      for (let row = 0; row < 4; row++) for (let col = 0; col < 3; col++) {
+        const x = 355 + col * 315, y = 310 + row * 145;
+        items.push(createTable(x, y, 255, 50, "", "#f0dcb4"));
+        seat(x + 8, y + 60, 0, 112, 72); seat(x + 135, y + 60, 0, 112, 72);
+      }
+    } else {
+      for (let row = 0; row < 2; row++) for (let col = 0; col < 2; col++) {
+        const cx = 540 + col * 510, cy = 310 + row * 460;
+        const table = createShape(cx - 90, cy - 90, 180, 180, "circle");
+        table.fill = "#eed5a3"; table.stroke = "#b18c55"; table.isTable = true; table.label = `${row * 2 + col + 1} 号桌`; items.push(table);
+        for (let i = 0; i < 6; i++) {
+          const angle = i * Math.PI / 3;
+          seat(cx + Math.cos(angle) * 158 - 52, cy + Math.sin(angle) * 158 - 36, angle * 180 / Math.PI - 90, 104, 72);
+        }
+      }
+    }
+    commitHistory();
+    state.items = items; state.draftImage = null;
+    getSeats().forEach(seat => orientSeatTowardNearestTable(seat));
+    state.people.forEach(person => { person.assignedSeatId = null; });
+    if (state.title === "未命名会议室" || Object.values(titles).includes(state.title)) state.title = titles[kind];
+    clearSelection(); dismissedEmpty = false; setTool("select");
+    state.view = { x: 110, y: 65, w: 1380, h: 862.5 };
+    renderAll(); scheduleSave(); showMobilePanel("canvas");
+    showToast(`已创建${titles[kind]}，共 ${seatNumber} 个座位`, true);
+  }
+
+  function measureText(text, size, family) {
+    textMeasureContext.font = `600 ${size}px ${fontStack(family)}`;
+    return textMeasureContext.measureText(text).width;
+  }
+
+  // Declared, not assigned, so the first render can measure before this line is reached.
+  function measurerFor(item) {
+    return (text, size) => measureText(text, size, item.fontFamily);
+  }
+
+  // Grow a text box so its own font size fits: wide enough to keep every word whole, tall enough for the lines.
+  function ensureLabelTextRoom(item) {
+    const size = Math.max(6, item.size || 28);
+    const measure = measurerFor(item);
+    const text = item.text || "标注";
+    // Wide enough to keep a short label on one line, and never so narrow that a word has to break.
+    const longest = Math.max(...String(text).split("\n").map(line => measure(line, size)));
+    item.w = Math.max(item.w, Math.min(1200, longest + 16), SeatMateCore.widestWord(text, size, measure) + 16);
+    item.h = Math.max(item.h, SeatMateCore.fitText(text, item.w - 16, 1e6, size, measure).height + 12);
+  }
+
+  function seatTextLayout(item, name, empty = false) {
+    return SeatMateCore.fitRotatedText(name, Math.max(12,item.w-20), Math.max(12,item.h-28), item.rotation || 0, empty ? 17 : item.nameSize || 24, measureText);
+  }
+
+  function ensureSeatTextRoom(seat, name) {
+    const center = itemCenter(seat);
+    // Refit from the chair's own size, so rotating it again never compounds the extra room.
+    if (seat.baseW === undefined) { seat.baseW = seat.w; seat.baseH = seat.h; }
+    seat.w = seat.baseW; seat.h = seat.baseH;
+    // Keep ordinary two-to-four-character names on one line, including side seats.
+    if (Array.from(name).length <= 4) {
+      const width = measureText(name, seat.nameSize || 24), height = (seat.nameSize || 24)*1.3;
+      const c=Math.abs(Math.cos((seat.rotation || 0)*Math.PI/180)), s=Math.abs(Math.sin((seat.rotation || 0)*Math.PI/180));
+      seat.w=Math.max(seat.w,c*width+s*height+20);
+      seat.h=Math.max(seat.h,s*width+c*height+28);
+    }
+    const minimumSize = Math.min(20, seat.nameSize || 24);
+    for (let i = 0; i < 40; i++) {
+      // Grow until the name is readable and wide enough that no word breaks across lines.
+      const layout = seatTextLayout(seat, name);
+      if (layout.size >= minimumSize && SeatMateCore.widestWord(name, layout.size, measureText) <= layout.width) break;
+      seat.w += 6; seat.h += 5;
+    }
+    seat.x = center.x - seat.w / 2; seat.y = center.y - seat.h / 2;
+    if (seat.tableId) {
+      const table = getItem(seat.tableId);
+      if (table) Object.assign(seat, SeatMateCore.seatAtDock(seat, table, { side:seat.dockSide, offset:seat.dockOffset, angle:seat.dockAngle }));
+    }
+  }
+
+  // A seat shows whichever roster column was used to fill it: the person, or the unit they came from.
+  function seatPersonText(seat, person) {
+    const occupant = person || (seat && seat.personId ? getPerson(seat.personId) : null);
+    if (!occupant) return "";
+    return seat.showUnit && occupant.unit ? occupant.unit : occupant.name;
+  }
+
+  // A rotated chair turns its narrow side to the reader, so give its name room again.
+  function refitSeatText(item) {
+    const seat = typeof item === "string" ? getItem(item) : item;
+    if (!seat || seat.type !== "seat" || !seat.personId) return;
+    const person = getPerson(seat.personId);
+    if (person) ensureSeatTextRoom(seat, seatPersonText(seat, person));
+  }
+
+  function getTables() {
+    return state.items.filter(item => item.type === "table" || item.isTable);
+  }
+
+  function updateDockedSeats(tableId) {
+    const table = getItem(tableId);
+    if (!table || (table.type !== "table" && !table.isTable)) return;
+    getSeats().filter(seat => seat.tableId === tableId).forEach(seat => {
+      Object.assign(seat, SeatMateCore.seatAtDock(seat, table, { side:seat.dockSide, offset:seat.dockOffset, angle:seat.dockAngle }));
+      refitSeatText(seat);
+    });
+  }
+
+  function movableItems(ids) {
+    const moving = new Set(ids);
+    getSeats().forEach(seat => { if (seat.tableId && moving.has(seat.tableId)) moving.add(seat.id); });
+    return state.items.filter(item => moving.has(item.id));
+  }
+
+  function rotateSelectionTo(angle) {
+    const selected = getSelectedItems();
+    if (!selected.length || selected.every(item => normalizeAngle(item.rotation || 0) === angle)) return;
+    commitHistory();
+    const ids = new Set(selected.map(item => item.id));
+    selected.forEach(item => { item.rotation = angle; if (item.type === "seat" && !ids.has(item.tableId)) delete item.tableId; });
+    selected.forEach(item => { updateDockedSeats(item.id); refitSeatText(item); });
+    renderAll(); scheduleSave();
+  }
+
+  function paletteProperty(item) {
+    if (item.type === "label") return "color";
+    if (colorTarget === "text") return item.type === "seat" ? "nameColor" : "textColor";
+    return "fill";
+  }
+
+  function applyPaletteColor(color, record = true) {
+    if (!/^#[0-9a-f]{6}$/i.test(color)) return;
+    const items = getSelectedItems();
+    if (items.length && record) commitHistory();
+    items.forEach(item => { item[paletteProperty(item)] = color; });
+    state.settings[colorTarget === "text" || items[0]?.type === "label" ? "drawText" : "drawFill"] = color;
+    renderAll(); scheduleSave();
+  }
+
+  function renderPalette() {
+    const items = getSelectedItems();
+    const item = items[0];
+    const color = item?.[paletteProperty(item)] || state.settings[colorTarget === "text" || item?.type === "label" ? "drawText" : "drawFill"] || "#edbe4c";
+    ui.paletteHint.textContent = items.length ? `修改 ${items.length} 个选中对象` : "用于新绘制的对象";
+    document.querySelectorAll("[data-color-target]").forEach(button => {
+      button.classList.toggle("is-active", button.dataset.colorTarget === colorTarget);
+      button.setAttribute("aria-pressed", String(button.dataset.colorTarget === colorTarget));
+    });
+    document.querySelectorAll("[data-color]").forEach(button => {
+      button.classList.toggle("is-active", button.dataset.color.toLowerCase() === color.toLowerCase());
+      button.setAttribute("aria-pressed", String(button.dataset.color.toLowerCase() === color.toLowerCase()));
+    });
+    if (/^#[0-9a-f]{6}$/i.test(color)) ui.customColor.value = color;
+    ui.colorValue.textContent = color.toUpperCase();
+  }
 
   function createInitialState() {
     const initial = createEmptyState();
@@ -103,7 +505,7 @@
       selectedIds: [],
       draftImage: null,
       view: { x: 0, y: 0, w: WORKSPACE.width, h: WORKSPACE.height },
-      settings: { snap: true, showReference: false }
+      settings: { snap: true, showReference: false, snapTables: true, drawFill: "#edbe4c", drawText: "#4e3721", drawFont: "sans" }
     };
   }
 
@@ -125,8 +527,7 @@
     els.undoBtn.addEventListener("click", undo);
     els.redoBtn.addEventListener("click", redo);
     els.saveBtn.addEventListener("click", () => {
-      saveLocal();
-      pulseButton(els.saveBtn, "已保存", "保存");
+      if (saveLocal()) showToast("布局已保存到此浏览器");
     });
 
     els.exportPngBtn.addEventListener("click", exportPng);
@@ -170,8 +571,8 @@
     els.draftViewerStage.addEventListener("wheel", onDraftViewerWheel, { passive: false });
 
     els.selectAllBtn.addEventListener("click", selectAllItems);
-    els.rotateLeftBtn.addEventListener("click", () => rotateSelectionBy(-15));
-    els.rotateRightBtn.addEventListener("click", () => rotateSelectionBy(15));
+    els.rotateLeftBtn.addEventListener("click", () => rotateSelectionBy(-90));
+    els.rotateRightBtn.addEventListener("click", () => rotateSelectionBy(90));
     els.groupBtn.addEventListener("click", groupSelected);
     els.ungroupBtn.addEventListener("click", ungroupSelected);
     els.duplicateBtn.addEventListener("click", duplicateSelected);
@@ -194,16 +595,28 @@
     currentTool = tool;
     draft = null;
     action = null;
+    els.stage.dataset.tool = tool;
+    if (tool !== "select") dismissedEmpty = true;
     els.toolGrid.querySelectorAll(".tool-btn").forEach((button) => {
       button.classList.toggle("is-active", button.dataset.tool === tool);
+      button.setAttribute("aria-pressed", String(button.dataset.tool === tool));
     });
+    const hints = { select: "拖出选框批量选择 · 方向键旋转 · 空格平移", pan: "拖动画布平移 · 滚轮缩放", table: "拖动绘制桌面 · Esc 返回选择", seat: "点击画布添加座位 · Esc 返回选择", "seat-row": "拖出一排等距椅子 · Esc 返回选择", label: "点击画布添加文字 · Esc 返回选择" };
+    ui.toolHint.textContent = hints[tool] || "拖动绘制图形 · Shift 约束比例 · 完成后自动选择";
     renderDraft();
     renderStatus();
   }
 
-  function onPointerDown(event) {
+  async function onPointerDown(event) {
     if (event.button !== 0 && event.button !== 1) return;
+    els.stage.focus({ preventScroll: true });
     const point = svgPoint(event);
+    if (currentTool === "pan" || event.button === 1) {
+      event.preventDefault();
+      action = { type: "pan", startClient: { x: event.clientX, y: event.clientY }, view: { ...state.view }, pointerId: event.pointerId };
+      els.stage.setPointerCapture(event.pointerId);
+      return;
+    }
     const resizeHandle = event.target.closest("[data-resize]");
     const rotateHandle = event.target.closest("[data-rotate]");
     const itemNode = event.target.closest("[data-id]");
@@ -211,7 +624,6 @@
     if (resizeHandle) {
       const item = getItem(resizeHandle.dataset.id);
       if (!item) return;
-      commitHistory();
       setSelection([item.id]);
       action = {
         type: "resize",
@@ -226,20 +638,18 @@
       return;
     }
 
-    if (rotateHandle || (itemNode && currentTool === "rotate")) {
-      const id = rotateHandle ? rotateHandle.dataset.id : itemNode.dataset.id;
-      const item = getItem(id);
+    if (rotateHandle) {
+      const item = getItem(rotateHandle.dataset.id);
       if (!item) return;
       if (!isSelected(item.id)) setSelection(idsForItemSelection(item));
       const ids = getSelectedIds();
       const center = selectionCenter(ids);
-      commitHistory();
       action = {
         type: "rotate",
         ids,
         center,
         startAngle: angleFromCenter(center, point),
-        origins: ids.map((selectedId) => cloneItem(getItem(selectedId))).filter(Boolean),
+        origins: movableItems(ids).map(cloneItem),
         pointerId: event.pointerId
       };
       els.stage.setPointerCapture(event.pointerId);
@@ -261,13 +671,18 @@
     if (itemNode && currentTool === "select") {
       const item = getItem(itemNode.dataset.id);
       if (!item) return;
+      if (event.shiftKey) {
+        toggleSelectionGroup(item);
+        renderAll();
+        return;
+      }
       if (event.ctrlKey || event.metaKey) {
         if (!isSelected(item.id)) setSelection(idsForItemSelection(item));
         action = {
           type: "copyMaybe",
           start: point,
           ids: getSelectedIds(),
-          origins: getSelectedIds().map((selectedId) => cloneItem(getItem(selectedId))).filter(Boolean),
+          origins: movableItems(getSelectedIds()).map(cloneItem),
           pointerId: event.pointerId
         };
         els.stage.setPointerCapture(event.pointerId);
@@ -276,12 +691,11 @@
       }
       if (!isSelected(item.id)) setSelection(idsForItemSelection(item));
       const ids = getSelectedIds();
-      commitHistory();
       action = {
         type: "drag",
         ids,
         start: point,
-        origins: ids.map((selectedId) => cloneItem(getItem(selectedId))).filter(Boolean),
+        origins: movableItems(ids).map(cloneItem),
         pointerId: event.pointerId
       };
       els.stage.setPointerCapture(event.pointerId);
@@ -289,24 +703,13 @@
       return;
     }
 
-    if (itemNode && currentTool === "marquee") {
-      const item = getItem(itemNode.dataset.id);
-      if (!item) return;
-      if (event.ctrlKey || event.metaKey) toggleSelectionGroup(item);
-      else setSelection(idsForItemSelection(item));
-      renderAll();
-      scheduleSave();
-      return;
-    }
-
     if (itemNode && isSelected(itemNode.dataset.id) && !["table", "seat", "label"].includes(currentTool) && !currentTool.startsWith("shape-")) {
       const ids = getSelectedIds();
-      commitHistory();
       action = {
         type: "drag",
         ids,
         start: point,
-        origins: ids.map((selectedId) => cloneItem(getItem(selectedId))).filter(Boolean),
+        origins: movableItems(ids).map(cloneItem),
         pointerId: event.pointerId
       };
       els.stage.setPointerCapture(event.pointerId);
@@ -334,31 +737,44 @@
       renderDraft();
       return;
     }
+    if (currentTool === "seat-row") {
+      draft = { type: "seatRow", start: point, end: point };
+      action = { type: "seatRow", start: point, pointerId: event.pointerId };
+      els.stage.setPointerCapture(event.pointerId);
+      renderDraft();
+      return;
+    }
+
 
     if (currentTool === "seat") {
       commitHistory();
-      const seat = createSeat(point.x - 43, point.y - 24, nextSeatLabel(), 0);
+      const seat = createSeat(point.x - 60, point.y - 40, nextSeatLabel(), 0);
+      seat.fill = state.settings.drawFill;
       orientSeatTowardNearestTable(seat);
       state.items.push(seat);
       setSelection([seat.id]);
+      setTool("select");
       renderAll();
       scheduleSave();
       return;
     }
 
     if (currentTool === "label") {
-      const text = window.prompt("文字", "标注");
+      const accepted = await openDialog("添加文字", "为会场添加讲台、入口或区域说明。", { input: "标注", confirm: "添加文字" });
+      if (!accepted) return;
+      const text = (ui.dialogContent.querySelector("input")?.value || "").trim();
       if (!text) return;
       commitHistory();
       const label = createLabel(point.x, point.y, text);
       state.items.push(label);
       setSelection([label.id]);
+      setTool("select");
       renderAll();
       scheduleSave();
       return;
     }
 
-    if (currentTool === "select" || currentTool === "marquee") {
+    if (currentTool === "select") {
       draft = { type: "marquee", x: point.x, y: point.y, w: 0, h: 0 };
       action = {
         type: "marquee",
@@ -379,9 +795,9 @@
     if (!action) return;
 
     if (action.type === "pan") {
-      const rect = els.stage.getBoundingClientRect();
-      const dx = ((event.clientX - action.startClient.x) * action.view.w) / rect.width;
-      const dy = ((event.clientY - action.startClient.y) * action.view.h) / rect.height;
+      const matrix = els.stage.getScreenCTM().inverse();
+      const dx = (event.clientX - action.startClient.x) * matrix.a;
+      const dy = (event.clientY - action.startClient.y) * matrix.d;
       state.view.x = action.view.x - dx;
       state.view.y = action.view.y - dy;
       setViewBox();
@@ -397,6 +813,11 @@
       return;
     }
 
+    if (["drag", "resize", "rotate"].includes(action.type) && !action.historyCommitted) {
+      if (action.start && Math.hypot(point.x - action.start.x, point.y - action.start.y) < 1) return;
+      commitHistory();
+      action.historyCommitted = true;
+    }
     if (action.type === "drag") {
       const dx = point.x - action.start.x;
       const dy = point.y - action.start.y;
@@ -409,6 +830,14 @@
           item.x = snap(item.x);
           item.y = snap(item.y);
         }
+      });
+      action.origins.forEach(origin => updateDockedSeats(origin.id));
+      const movingIds = new Set(action.origins.map(item => item.id));
+      action.origins.forEach(origin => {
+        const item = getItem(origin.id);
+        if (item?.type !== "seat" || (item.tableId && movingIds.has(item.tableId))) return;
+        if (event.altKey) delete item.tableId;
+        else orientSeatTowardNearestTable(item);
       });
       renderStage();
       renderStatus();
@@ -427,6 +856,7 @@
       action = {
         ...action,
         type: "drag",
+        historyCommitted: true,
         ids: copies.map((copy) => copy.id),
         origins: copies.map(cloneItem)
       };
@@ -448,6 +878,8 @@
     if (action.type === "rotate") {
       const delta = angleFromCenter(action.center, point) - action.startAngle;
       rotateItems(action, delta);
+      action.ids.forEach(id => { const item = getItem(id); if (item?.type === "seat" && !action.ids.includes(item.tableId)) delete item.tableId; });
+      action.ids.forEach(updateDockedSeats);
       renderStage();
       renderStatus();
       return;
@@ -457,6 +889,13 @@
       const rect = normalizedRect(action.start.x, action.start.y, point.x - action.start.x, point.y - action.start.y);
       draft = { type: "marquee", ...rect };
       renderDraft();
+      return;
+    }
+
+    if (action.type === "seatRow") {
+      draft = { type: "seatRow", start: action.start, end: point };
+      renderDraft();
+      ui.toolHint.textContent = `松开放置 ${seatRowPlan(draft.start, draft.end).count} 把椅子`;
       return;
     }
 
@@ -490,6 +929,14 @@
       draft = null;
       renderAll();
       scheduleSave();
+    } else if (action.type === "seatRow" && draft) {
+      commitHistory();
+      const seats = createSeatRow(draft.start, draft.end);
+      setSelection(seats.map(seat => seat.id));
+      draft = null;
+      renderAll();
+      scheduleSave();
+      showToast(`已添加 ${seats.length} 把椅子`, true);
     } else if (action.type === "marquee" && draft) {
       const rect = { ...draft };
       if (rect.w < 6 && rect.h < 6) {
@@ -518,7 +965,9 @@
     } catch (error) {
       // The pointer may already be released by the browser.
     }
+    const wasDrawing = action.type === "draw" || action.type === "seatRow";
     action = null;
+    if (wasDrawing) setTool("select");
   }
 
   function onWheel(event) {
@@ -528,62 +977,25 @@
   }
 
   function resizeItem(item, activeAction, point) {
-    const dx = point.x - activeAction.start.x;
-    const dy = point.y - activeAction.start.y;
-    const origin = activeAction.origin;
-    let x = origin.x;
-    let y = origin.y;
-    let w = origin.w;
-    let h = origin.h;
-
-    if (activeAction.handle.includes("e")) w = origin.w + dx;
-    if (activeAction.handle.includes("s")) h = origin.h + dy;
-    if (activeAction.handle.includes("w")) {
-      x = origin.x + dx;
-      w = origin.w - dx;
+    Object.assign(item, SeatMateCore.resizeBox(activeAction.origin, activeAction.handle, { x: point.x - activeAction.start.x, y: point.y - activeAction.start.y }, state.settings.snap, item.type === "seat" ? 40 : 24));
+    if (item.type === "seat") { delete item.tableId; delete item.baseW; delete item.baseH; }
+    if (item.type === "label" && activeAction.handle.length === 2) {
+      const scale = Math.min(item.w / activeAction.origin.w, item.h / activeAction.origin.h);
+      item.size = Math.min(400, Math.max(6, Math.round((activeAction.origin.size || 28) * scale)));
     }
-    if (activeAction.handle.includes("n")) {
-      y = origin.y + dy;
-      h = origin.h - dy;
-    }
-
-    item.x = state.settings.snap ? snap(x) : x;
-    item.y = state.settings.snap ? snap(y) : y;
-    item.w = Math.max(item.type === "label" ? 20 : 30, state.settings.snap ? snap(w) : w);
-    item.h = Math.max(item.type === "label" ? 14 : 24, state.settings.snap ? snap(h) : h);
-    if (item.type === "label") {
-      const scale = Math.max(item.w / Math.max(1, origin.w || item.w), item.h / Math.max(1, origin.h || item.h));
-      item.size = clamp((origin.size || 24) * scale, 8, 96);
-    }
+    updateDockedSeats(item.id);
   }
 
   function orientSeatTowardNearestTable(seat) {
-    const table = nearestTableForSeat(seat);
-    if (!table) return;
-    const seatCenter = itemCenter(seat);
-    const tableCenter = itemCenter(table);
-    const dx = seatCenter.x - tableCenter.x;
-    const dy = seatCenter.y - tableCenter.y;
-
-    if (Math.abs(dx) > Math.abs(dy)) {
-      seat.rotation = dx < 0 ? 90 : -90;
-    } else {
-      seat.rotation = dy < 0 ? 180 : 0;
-    }
+    if (!state.settings.snapTables) { delete seat.tableId; return; }
+    const dock = SeatMateCore.findSeatDock(seat, getTables());
+    if (dock) { const { distance, ...position } = dock; Object.assign(seat, position); }
+    else delete seat.tableId;
   }
 
   function nearestTableForSeat(seat) {
-    const tables = state.items.filter((item) => item.type === "table");
-    if (!tables.length) return null;
-    const center = itemCenter(seat);
-    return tables
-      .map((table) => {
-        const tableCenter = itemCenter(table);
-        const distance = Math.hypot(center.x - tableCenter.x, center.y - tableCenter.y);
-        const overlapPenalty = rectsIntersect(boundsForItem(seat), boundsForItem(table)) ? -10000 : 0;
-        return { table, score: distance + overlapPenalty };
-      })
-      .sort((a, b) => a.score - b.score)[0].table;
+    const dock = SeatMateCore.findSeatDock(seat, getTables());
+    return dock ? getItem(dock.tableId) : null;
   }
 
   function selectItemsInRect(rect, append) {
@@ -657,8 +1069,10 @@
   }
 
   function boundsForItem(item) {
-    const size = itemSize(item);
-    return { x: item.x, y: item.y, w: size.w, h: size.h };
+    const center = itemCenter(item), angle = (item.rotation || 0) * Math.PI / 180;
+    const w = Math.abs(Math.cos(angle)) * item.w + Math.abs(Math.sin(angle)) * item.h;
+    const h = Math.abs(Math.sin(angle)) * item.w + Math.abs(Math.cos(angle)) * item.h;
+    return { x: center.x - w / 2, y: center.y - h / 2, w, h };
   }
 
   function itemCenter(item) {
@@ -670,17 +1084,7 @@
   }
 
   function itemSize(item) {
-    if (item.type === "label") {
-      const size = item.size || 24;
-      return {
-        w: Math.max(60, String(item.text || "").length * size),
-        h: size + 16
-      };
-    }
-    return {
-      w: Math.max(1, Number(item.w) || 1),
-      h: Math.max(1, Number(item.h) || 1)
-    };
+    return { w: Math.max(1, Number(item.w) || 1), h: Math.max(1, Number(item.h) || 1) };
   }
 
   function rectsIntersect(a, b) {
@@ -702,15 +1106,18 @@
     if (!hasDragType(event.dataTransfer, "text/person-id") && !hasDragType(event.dataTransfer, "text/plain")) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = "move";
+    els.stage.querySelectorAll(".is-drop-target").forEach(node => node.classList.remove("is-drop-target"));
+    event.target.closest("[data-seat-id]")?.classList.add("is-drop-target");
   }
 
   function onStageDrop(event) {
+    els.stage.querySelectorAll(".is-drop-target").forEach(node => node.classList.remove("is-drop-target"));
     const personId = event.dataTransfer.getData("text/person-id") || event.dataTransfer.getData("text/plain");
     const seatNode = event.target.closest("[data-seat-id]");
-    if (!personId || !seatNode) return;
+    if (!getPerson(personId) || !seatNode) return;
     event.preventDefault();
     commitHistory();
-    assignPersonToSeat(personId, seatNode.dataset.seatId);
+    assignPersonToSeat(personId, seatNode.dataset.seatId, event.dataTransfer.getData("text/person-field") || "name");
     setSelection([seatNode.dataset.seatId]);
     renderAll();
     scheduleSave();
@@ -720,25 +1127,45 @@
     const card = event.target.closest("[data-person-id]");
     if (!card) return;
     event.dataTransfer.setData("text/person-id", card.dataset.personId);
+    event.dataTransfer.setData("text/person-field", event.target.closest("[data-assign-field]")?.dataset.assignField || "name");
     event.dataTransfer.setData("text/plain", card.dataset.personId);
     event.dataTransfer.effectAllowed = "move";
   }
 
   function onPeopleListClick(event) {
+    if (Date.now() < suppressRosterClickUntil) return;
     const removeButton = event.target.closest("[data-remove-person]");
     if (removeButton) {
       removePerson(removeButton.dataset.removePerson);
       return;
     }
+    const editButton = event.target.closest("[data-edit-person]");
+    if (editButton) {
+      editPerson(editButton.dataset.editPerson);
+      return;
+    }
 
     const card = event.target.closest("[data-person-id]");
     if (!card) return;
+    const field = event.target.closest("[data-assign-field]")?.dataset.assignField || "name";
     const selected = getSelectedItem();
     if (selected && selected.type === "seat") {
       commitHistory();
-      assignPersonToSeat(card.dataset.personId, selected.id);
+      assignPersonToSeat(card.dataset.personId, selected.id, field);
       renderAll();
       scheduleSave();
+      showToast(`已将 ${seatPersonText(selected)} 安排到 ${selected.label}`, true);
+    } else {
+      const person = getPerson(card.dataset.personId);
+      if (person.assignedSeatId) {
+        setSelection([person.assignedSeatId]);
+        const seat = getItem(person.assignedSeatId);
+        const center = itemCenter(seat);
+        state.view.x = center.x - state.view.w / 2;
+        state.view.y = center.y - state.view.h / 2;
+        renderAll();
+        showMobilePanel("canvas");
+      } else showToast("先选中一个座位，再点击姓名；也可以使用一键自动排座");
     }
   }
 
@@ -746,11 +1173,30 @@
     const activeTag = document.activeElement ? document.activeElement.tagName : "";
     const editing = ["INPUT", "TEXTAREA", "SELECT"].includes(activeTag);
 
+    if (ui.appDialog.open) return;
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
       event.preventDefault();
-      saveLocal();
-      pulseButton(els.saveBtn, "已保存", "保存");
+      if (saveLocal()) showToast("布局已保存到此浏览器");
       return;
+    }
+    if (editing) return;
+    if (event.code === "Space") {
+      event.preventDefault();
+      if (spaceTool === null) { spaceTool = currentTool; setTool("pan"); }
+      return;
+    }
+    const shortcuts = { v: "select", h: "pan", r: "shape-rect", t: "label", c: "seat", s: "seat-row" };
+    if (!event.ctrlKey && !event.metaKey && !event.altKey) {
+      const key = event.key.toLowerCase();
+      if (shortcuts[key]) { event.preventDefault(); setTool(shortcuts[key]); return; }
+      if (key === "f") { event.preventDefault(); fitView(); return; }
+      if (key === "/") { event.preventDefault(); switchPanel("roster"); showMobilePanel("right"); els.personSearch.focus(); return; }
+      if (key === "?") { event.preventDefault(); showHelp(); return; }
+      if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key) && getSelectedIds().length) {
+        event.preventDefault();
+        if (!event.repeat) rotateSelectionTo({ ArrowUp: 0, ArrowRight: 90, ArrowDown: 180, ArrowLeft: 270 }[event.key]);
+        return;
+      }
     }
 
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
@@ -779,10 +1225,10 @@
       deleteSelected();
     } else if (event.key === "[") {
       event.preventDefault();
-      rotateSelectionBy(-15);
+      rotateSelectionBy(-90);
     } else if (event.key === "]") {
       event.preventDefault();
-      rotateSelectionBy(15);
+      rotateSelectionBy(90);
     } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "d") {
       event.preventDefault();
       duplicateSelected();
@@ -793,7 +1239,9 @@
       }
       draft = null;
       action = null;
+      clearSelection();
       setTool("select");
+      renderAll();
     }
   }
 
@@ -906,6 +1354,19 @@
       }));
       return;
     }
+    if (draft.type === "seatRow") {
+      const plan = seatRowPlan(draft.start, draft.end);
+      plan.centers.forEach(center => els.draftLayer.appendChild(svgEl("rect", {
+        class: "draft-rect",
+        x: center.x - 60,
+        y: center.y - 40,
+        width: 120,
+        height: 80,
+        rx: 8,
+        transform: `rotate(${plan.rotation} ${center.x} ${center.y})`
+      })));
+      return;
+    }
     if (draft.type !== "draw") return;
     if (draft.kind === "circle") {
       els.draftLayer.appendChild(svgEl("ellipse", {
@@ -962,11 +1423,11 @@
       width: item.w,
       height: item.h,
       rx: 8,
-      fill: item.fill || "#e7d5b4"
+      fill: item.fill || "#edcf95"
     }));
     if (item.label) {
       group.appendChild(svgText(item.label, item.w / 2, item.h / 2, {
-        class: "table-label"
+        class: "table-label", fill: item.textColor || "#6f4b20", "font-size":22
       }));
     }
     if (isSelected(item.id)) addSelectionChrome(group, item, true);
@@ -975,16 +1436,16 @@
 
   function renderSeat(item) {
     const person = item.personId ? getPerson(item.personId) : null;
-    const color = person ? colorForUnit(person.id || person.name) : "#fffdf8";
-    const stroke = person ? shade(color, -42) : "#52615b";
+    const color = item.fill || (person ? colorForUnit(person.unit || person.name) : "#fff8e9");
+    const stroke = person ? shade(color, -42) : "#b49a72";
     const group = svgEl("g", {
-      class: "item seat-item",
+      class: `item seat-item${item.tableId ? " is-docked" : ""}`,
       "data-id": item.id,
       "data-seat-id": item.id,
       transform: transformFor(item)
     });
     if (person) {
-      group.appendChild(svgTitle(person.name));
+      group.appendChild(svgTitle(seatPersonText(item, person)));
     }
 
     group.appendChild(svgEl("rect", {
@@ -1004,45 +1465,35 @@
       width: item.w - 16,
       height: 13,
       rx: 6,
-      fill: person ? shade(color, -18) : "#e7dfd2"
+      fill: person ? shade(color, -18) : "#ead8b7"
     }));
     group.appendChild(svgEl("path", {
       class: "seat-front",
       d: `M ${item.w / 2 - 8} 7 L ${item.w / 2} 2 L ${item.w / 2 + 8} 7`,
       fill: "none",
-      stroke: person ? shade(color, -55) : "#52615b",
+      stroke: person ? shade(color, -55) : "#b49a72",
       "stroke-width": 2,
       "stroke-linecap": "round",
       "stroke-linejoin": "round"
     }));
 
     if (person) {
-      renderSeatText(group, person.name, item);
+      renderSeatText(group, seatPersonText(item, person), item);
     } else {
-      group.appendChild(svgText(item.label || "空位", item.w / 2, item.h / 2 + 4, {
-        class: "seat-empty"
-      }));
+      renderSeatText(group, item.label || "空位", item, true);
     }
 
     if (isSelected(item.id)) addSelectionChrome(group, item, true);
     return group;
   }
 
-  function renderSeatText(group, name, item) {
-    const textGroup = svgEl("g", {
-      transform: `rotate(${-(item.rotation || 0)} ${item.w / 2} ${item.h / 2})`
-    });
-    const preferredSize = item.nameSize || 15;
-    const nameLines = wrapText(name, item.w - 14, preferredSize, 2);
-    const nameSize = fitFontSize(nameLines, item.w - 14, preferredSize, 8);
-    const startY = item.h / 2 - ((nameLines.length - 1) * (nameSize + 2)) / 2;
-    nameLines.forEach((line, index) => {
-      textGroup.appendChild(svgText(line, item.w / 2, startY + index * (nameSize + 2), {
-        class: "seat-name",
-        "font-size": nameSize,
-        fill: item.nameColor || "#211f1b"
-      }));
-    });
+  function renderSeatText(group, name, item, empty = false) {
+    const textGroup = svgEl("g", { transform:`rotate(${-(item.rotation || 0)} ${item.w / 2} ${item.h / 2})` });
+    const layout = seatTextLayout(item, name, empty);
+    const start = item.h / 2 - layout.height / 2 + layout.lineHeight / 2;
+    layout.lines.forEach((line,index) => textGroup.appendChild(svgText(line, item.w / 2, start + index * layout.lineHeight, {
+      class:empty ? "seat-empty" : "seat-name", "font-size":layout.size, fill:item.nameColor || "#4e3721", "dominant-baseline":"central"
+    })));
     group.appendChild(textGroup);
   }
 
@@ -1052,8 +1503,8 @@
       "data-id": item.id,
       transform: transformFor(item)
     });
-    const fill = item.fill || "#dbe8e6";
-    const stroke = item.stroke || "#28766f";
+    const fill = item.fill || "#efd39b";
+    const stroke = item.stroke || "#b58b49";
 
     if (item.kind === "circle") {
       group.appendChild(svgEl("ellipse", {
@@ -1087,7 +1538,7 @@
 
     if (item.label) {
       group.appendChild(svgText(item.label, item.w / 2, item.h / 2, {
-        class: "shape-label"
+        class: "shape-label", fill: item.textColor || "#6f4b20", "font-size":20
       }));
     }
     if (isSelected(item.id)) addSelectionChrome(group, item, true);
@@ -1095,73 +1546,30 @@
   }
 
   function renderLabel(item) {
-    const group = svgEl("g", {
-      class: "item label-item",
-      "data-id": item.id,
-      transform: transformFor(item)
-    });
-    const text = svgText(item.text || "标注", 0, 0, {
-      class: "layout-label",
-      "font-size": item.size || 24
-    });
-    const width = Math.max(item.w || 0, Math.max(60, String(item.text || "").length * (item.size || 24)));
-    const height = item.h || (item.size || 24) + 16;
-    group.appendChild(svgEl("rect", {
-      class: "label-hitbox",
-      x: -8,
-      y: -(item.size || 24),
-      width,
-      height,
-      rx: 6
-    }));
-    group.appendChild(text);
-    if (isSelected(item.id)) {
-      group.appendChild(svgEl("rect", {
-        class: "selected-outline",
-        x: -8,
-        y: -(item.size || 24),
-        width,
-        height,
-        rx: 8
-      }));
-      addRotateHandle(group, item, width, item.size || 24, -8, -(item.size || 24));
-      addResizeHandles(group, item, width, height, -8, -(item.size || 24));
-    }
+    const group = svgEl("g", { class: "item label-item", "data-id": item.id, transform: transformFor(item) });
+    group.appendChild(svgEl("rect", { class:"label-hitbox", x:0, y:0, width:item.w, height:item.h, rx:4 }));
+    const layout = SeatMateCore.fitText(item.text || "标注", item.w - 16, item.h - 12, item.size || 28, measurerFor(item));
+    const start = (item.h - layout.height) / 2 + layout.lineHeight / 2;
+    layout.lines.forEach((line,index) => group.appendChild(svgText(line, 8, start + index * layout.lineHeight, { class:"layout-label", "font-size":layout.size, "font-family":fontStack(item.fontFamily), fill:item.color || "#4e3721", "dominant-baseline":"central" })));
+    group.appendChild(svgTitle(item.text || "标注"));
+    if (isSelected(item.id)) addSelectionChrome(group, item, true);
     return group;
   }
 
   function addSelectionChrome(group, item, resizable) {
-    group.appendChild(svgEl("rect", {
-      class: "selected-outline",
-      x: -5,
-      y: -5,
-      width: item.w + 10,
-      height: item.h + 10,
-      rx: 10
-    }));
-    addRotateHandle(group, item, item.w, item.h, 0, 0);
-    if (!resizable) return;
-    addResizeHandles(group, item, item.w, item.h);
+    group.appendChild(svgEl("rect", { class: "selected-outline", x: 0, y: 0, width: item.w, height: item.h, rx: 4 }));
+    addRotateHandle(group, item, item.w, item.h);
+    if (resizable) addResizeHandles(group, item, item.w, item.h);
   }
 
   function addResizeHandles(group, item, width, height, xOffset = 0, yOffset = 0) {
-    const handles = [
-      ["nw", xOffset - 8, yOffset - 8],
-      ["ne", xOffset + width - 2, yOffset - 8],
-      ["sw", xOffset - 8, yOffset + height - 2],
-      ["se", xOffset + width - 2, yOffset + height - 2]
-    ];
-    handles.forEach(([name, x, y]) => {
-      group.appendChild(svgEl("rect", {
-        class: "resize-handle",
-        "data-id": item.id,
-        "data-resize": name,
-        x,
-        y,
-        width: 10,
-        height: 10,
-        rx: 2
-      }));
+    const scale = Math.hypot(els.stage.getScreenCTM()?.a || 1, els.stage.getScreenCTM()?.b || 0);
+    const size = 9 / scale;
+    const handles = [["nw",0,0],["n",width/2,0],["ne",width,0],["e",width,height/2],["se",width,height],["s",width/2,height],["sw",0,height],["w",0,height/2]];
+    handles.forEach(([name,x,y]) => {
+      const handle = svgEl("rect", { class: "resize-handle", "data-id": item.id, "data-resize": name, x: x+xOffset-size/2, y:y+yOffset-size/2, width:size, height:size, rx:name.length === 1 ? size/2 : size/5 });
+      handle.appendChild(svgTitle(name.length === 1 ? (/[ew]/.test(name) ? "拖动调整宽度" : "拖动调整高度") : "拖动调整大小"));
+      group.appendChild(handle);
     });
   }
 
@@ -1188,15 +1596,16 @@
   function renderPeople() {
     const query = els.personSearch.value.trim().toLowerCase();
     const people = state.people.filter((person) => {
-      if (!query) return true;
-      return person.name.toLowerCase().includes(query);
+      if (ui.rosterFilter.value === "pending" && person.assignedSeatId) return false;
+      if (ui.rosterFilter.value === "assigned" && !person.assignedSeatId) return false;
+      return !query || `${person.name} ${person.unit}`.toLowerCase().includes(query);
     });
 
     els.peopleList.replaceChildren();
     if (!people.length) {
       const empty = document.createElement("div");
       empty.className = "empty-list";
-      empty.textContent = state.people.length ? "没有匹配结果" : "还没有名单";
+      empty.innerHTML = state.people.length ? '没有符合条件的人员<small>试试其他姓名或切换筛选条件</small>' : '<svg class="ui-icon" aria-hidden="true"><use href="#i-people"/></svg>等待第一位参会者<small>在上方粘贴姓名，开始安排座位</small>';
       els.peopleList.appendChild(empty);
       return;
     }
@@ -1204,31 +1613,54 @@
     people.forEach((person) => {
       const card = document.createElement("div");
       card.className = `person-card${person.assignedSeatId ? " is-assigned" : ""}`;
-      card.draggable = true;
+      card.draggable = false;
       card.dataset.personId = person.id;
+      card.tabIndex = 0;
+      card.setAttribute("aria-label", `${person.name}，${person.assignedSeatId ? seatLabel(person.assignedSeatId) : "待安排"}`);
+      card.addEventListener("keydown", event => {
+        if (event.target !== card || !["Enter", " "].includes(event.key)) return;
+        event.preventDefault(); event.stopPropagation(); card.click();
+      });
 
       const swatch = document.createElement("span");
       swatch.className = "person-swatch";
-      swatch.style.background = colorForUnit(person.unit);
+      swatch.style.background = colorForUnit(person.unit || person.name);
 
       const text = document.createElement("div");
+      text.className = "person-text";
       const name = document.createElement("div");
       name.className = "person-name";
+      name.dataset.assignField = "name";
       name.textContent = person.name;
-      text.append(name);
+      name.title = `点击用「${person.name}」排座`;
+      const unit = document.createElement("div");
+      unit.className = "person-unit";
+      unit.dataset.assignField = "unit";
+      unit.textContent = person.unit || (person.kind === "organization" ? "单位" : "—");
+      unit.title = person.unit ? `点击用「${person.unit}」排座` : "没有单独的单位，排座时使用左侧名称";
+      unit.classList.toggle("is-empty", !person.unit);
+      text.append(name, unit);
 
       const meta = document.createElement("div");
       meta.className = "person-meta";
       const seat = document.createElement("span");
       seat.className = "person-seat";
       seat.textContent = person.assignedSeatId ? seatLabel(person.assignedSeatId) : "待排";
+      const edit = document.createElement("button");
+      edit.className = "person-edit";
+      edit.type = "button";
+      edit.title = `修改 ${person.name} 的姓名和单位`;
+      edit.setAttribute("aria-label", `修改 ${person.name}`);
+      edit.dataset.editPerson = person.id;
+      edit.textContent = "改";
       const remove = document.createElement("button");
       remove.className = "person-remove";
       remove.type = "button";
-      remove.title = "移除";
+      remove.title = `移除 ${person.name}`;
+      remove.setAttribute("aria-label", `移除 ${person.name}`);
       remove.dataset.removePerson = person.id;
       remove.textContent = "×";
-      meta.append(seat, remove);
+      meta.append(seat, edit, remove);
 
       card.append(swatch, text, meta);
       els.peopleList.appendChild(card);
@@ -1247,8 +1679,10 @@
       const assigned = seats.filter((seat) => seat.personId).length;
       els.inspector.innerHTML = `
         <div class="inspector-empty">
-          <strong>${seats.length}</strong> 个座位，<strong>${assigned}</strong> 个已安排。<br>
-          <strong>${state.people.length}</strong> 人名单。
+          <svg class="ui-icon" aria-hidden="true"><use href="#i-sliders"/></svg>
+          <strong>让每个细节恰到好处</strong><br>
+          在画布中选择桌面、座位或文字，<br>即可调整大小、位置、颜色和人员。<br><br>
+          Shift 点击多选，批量对齐更轻松。
         </div>
       `;
       return;
@@ -1305,7 +1739,7 @@
         ${fieldHtml("旋转", "rotation", round(item.rotation || 0), "number")}
         <div class="field">
           <label>颜色</label>
-          <input data-prop="fill" type="color" value="${escapeAttr(item.fill || "#e7d5b4")}">
+          <input data-prop="fill" type="color" value="${escapeAttr(item.fill || "#edcf95")}">
         </div>
       </div>
       <div class="inspector-actions">
@@ -1327,12 +1761,13 @@
         ${fieldHtml("旋转", "rotation", round(item.rotation || 0), "number")}
         <div class="field">
           <label>填充</label>
-          <input data-prop="fill" type="color" value="${escapeAttr(item.fill || "#dbe8e6")}">
+          <input data-prop="fill" type="color" value="${escapeAttr(item.fill || "#efd39b")}">
         </div>
         <div class="field">
           <label>描边</label>
-          <input data-prop="stroke" type="color" value="${escapeAttr(item.stroke || "#28766f")}">
+          <input data-prop="stroke" type="color" value="${escapeAttr(item.stroke || "#b58b49")}">
         </div>
+        ${item.kind !== "triangle" ? `<label class="check-row full"><input type="checkbox" data-prop="isTable" ${item.isTable ? "checked" : ""}>作为桌面，允许座椅贴合</label>` : ""}
       </div>
       <div class="inspector-actions">
         <button class="mini-btn" data-action="duplicate" type="button">复制</button>
@@ -1343,6 +1778,7 @@
   }
 
   function renderSeatInspector(item) {
+    const occupant = item.personId ? getPerson(item.personId) : null;
     const personOptions = [
       `<option value="">空位</option>`,
       ...state.people.map((person) => {
@@ -1362,10 +1798,11 @@
         ${fieldHtml("Y", "y", round(item.y), "number")}
         ${fieldHtml("宽", "w", round(item.w), "number")}
         ${fieldHtml("高", "h", round(item.h), "number")}
-        ${fieldHtml("姓名字号", "nameSize", round(item.nameSize || 15), "number")}
+        ${fieldHtml("名称字号", "nameSize", round(item.nameSize || 24), "number")}
         ${fieldHtml("旋转", "rotation", round(item.rotation || 0), "number")}
+        ${occupant && occupant.unit ? selectHtml("座位显示", "showUnit", item.showUnit ? "unit" : "name", { name: `姓名（${occupant.name}）`, unit: `单位（${occupant.unit}）` }, "full") : ""}
         <div class="field full">
-          <label>姓名颜色</label>
+          <label>名称颜色</label>
           <input data-prop="nameColor" type="color" value="${escapeAttr(item.nameColor || "#211f1b")}">
         </div>
       </div>
@@ -1378,7 +1815,7 @@
     const select = els.inspector.querySelector("#seatPersonSelect");
     select.addEventListener("change", () => {
       commitHistory();
-      if (select.value) assignPersonToSeat(select.value, item.id);
+      if (select.value) assignPersonToSeat(select.value, item.id, item.showUnit ? "unit" : "name");
       else unassignSeat(item.id);
       renderAll();
       scheduleSave();
@@ -1394,8 +1831,11 @@
         </div>
         ${fieldHtml("X", "x", round(item.x), "number")}
         ${fieldHtml("Y", "y", round(item.y), "number")}
+        ${fieldHtml("宽", "w", round(item.w), "number")}
+        ${fieldHtml("高", "h", round(item.h), "number")}
         ${fieldHtml("字号", "size", round(item.size || 24), "number")}
         ${fieldHtml("旋转", "rotation", round(item.rotation || 0), "number")}
+        ${selectHtml("字体", "fontFamily", item.fontFamily || "sans", FONT_LABELS, "full")}
       </div>
       <div class="inspector-actions">
         <button class="mini-btn" data-action="duplicate" type="button">复制</button>
@@ -1406,15 +1846,24 @@
   }
 
   function bindInspectorInputs() {
+    els.inspector.querySelectorAll(".field").forEach((field, index) => {
+      const input = field.querySelector("input,select,textarea");
+      const label = field.querySelector("label");
+      if (input && label) { input.id ||= `inspector-field-${index}`; label.htmlFor = input.id; }
+    });
     els.inspector.querySelectorAll("[data-prop]").forEach((input) => {
       input.addEventListener("focus", () => commitHistory(), { once: true });
       input.addEventListener("input", () => {
         const prop = input.dataset.prop;
         let value = input.value;
+        if (input.type === "checkbox") value = input.checked;
         if (input.type === "number") value = Number.parseFloat(input.value) || 0;
         if (prop === "batchRotation") {
           getSelectedItems().forEach((selectedItem) => {
             selectedItem.rotation = value;
+            if (selectedItem.type === "seat") delete selectedItem.tableId;
+            updateDockedSeats(selectedItem.id);
+            refitSeatText(selectedItem);
           });
           renderStage();
           renderStatus();
@@ -1425,9 +1874,18 @@
         if (!item) return;
         item[prop] = value;
         if (["w", "h"].includes(prop)) item[prop] = Math.max(16, item[prop]);
-        if (item.type === "label" && prop === "text") {
-          item.w = Math.max(item.w || 0, Math.max(60, String(item.text || "").length * (item.size || 24)));
-          item.h = Math.max(item.h || 0, (item.size || 24) + 16);
+        if (item.type === "seat" && ["x","y","w","h","rotation"].includes(prop)) delete item.tableId;
+        // A chair sized in the panel keeps that size as its own, and one turned there refits its name.
+        if (item.type === "seat" && ["w","h"].includes(prop)) { delete item.baseW; delete item.baseH; }
+        if (item.type === "seat" && prop === "rotation") refitSeatText(item);
+        if (item.type === "seat" && prop === "showUnit") { item.showUnit = value === "unit"; refitSeatText(item); }
+        if (item.type === "label" && ["size", "text", "fontFamily"].includes(prop)) {
+          if (prop === "fontFamily") state.settings.drawFont = value;
+          ensureLabelTextRoom(item);
+        }
+        if (["x", "y", "w", "h", "rotation"].includes(prop)) updateDockedSeats(item.id);
+        if (prop === "isTable") {
+          getSeats().forEach(seat => { if (value) orientSeatTowardNearestTable(seat); else if (seat.tableId === item.id) delete seat.tableId; });
         }
         renderStage();
         renderStatus();
@@ -1457,8 +1915,23 @@
     const seats = getSeats();
     const assigned = seats.filter((seat) => seat.personId).length;
     const peopleAssigned = state.people.filter((person) => person.assignedSeatId).length;
-    els.statusLine.textContent = `${seats.length}个座位 · ${assigned}个已安排 · ${state.people.length}人名单`;
-    els.rosterCount.textContent = `${state.people.length}人`;
+    renderPalette();
+    ui.snapTablesToggle.checked = state.settings.snapTables !== false;
+    els.statusLine.textContent = `${seats.length} 个座位 · ${seats.length - assigned} 个空位`;
+    els.rosterCount.textContent = state.people.length;
+    ui.totalPeople.textContent = state.people.length;
+    ui.assignedPeople.textContent = peopleAssigned;
+    ui.pendingPeople.textContent = state.people.length - peopleAssigned;
+    const percent = state.people.length ? Math.round(peopleAssigned / state.people.length * 100) : 0;
+    ui.assignmentProgress.style.width = `${percent}%`;
+    ui.assignmentProgress.parentElement.setAttribute("aria-valuenow", percent);
+    ui.progressText.textContent = state.people.length ? `已完成 ${percent}%` : "尚未添加人员";
+    ui.canvasEmpty.hidden = !!state.items.length || !!state.draftImage || dismissedEmpty;
+    ui.editPropertiesBtn.disabled = !getSelectedIds().length;
+    els.autoAssignBtn.disabled = !state.people.some(person => !person.assignedSeatId);
+    els.clearAssignBtn.disabled = !assigned;
+    els.clearPeopleBtn.disabled = !state.people.length;
+    els.draftAutoBtn.disabled = !state.draftImage;
     els.canvasTitle.textContent = state.title || "未命名会议室";
 
     const selected = getSelectedItem();
@@ -1483,6 +1956,7 @@
     const hasGroup = selectedItems.some((item) => item.groupId);
     els.undoBtn.disabled = history.length === 0;
     els.redoBtn.disabled = redoStack.length === 0;
+    document.querySelectorAll("[data-history]").forEach(button => { button.disabled = button.dataset.history === "undo" ? !history.length : !redoStack.length; });
     els.rotateLeftBtn.disabled = !hasSelection;
     els.rotateRightBtn.disabled = !hasSelection;
     els.groupBtn.disabled = selectedItems.length < 2;
@@ -1492,16 +1966,27 @@
     els.draftClearBtn.disabled = !state.draftImage;
   }
 
-  function fieldHtml(label, prop, value, type = "text", extraClass = "") {
+  function selectHtml(label, prop, value, options, extraClass = "") {
+    const choices = Object.entries(options).map(([key, text]) =>
+      `<option value="${escapeAttr(key)}"${key === value ? " selected" : ""}>${escapeHtml(text)}</option>`).join("");
     return `
       <div class="field ${extraClass}">
-        <label>${escapeHtml(label)}</label>
-        <input data-prop="${escapeAttr(prop)}" type="${escapeAttr(type)}" value="${escapeAttr(String(value))}">
+        <label for="prop-${escapeAttr(prop)}">${escapeHtml(label)}</label>
+        <select id="prop-${escapeAttr(prop)}" data-prop="${escapeAttr(prop)}">${choices}</select>
       </div>
     `;
   }
 
-  function createTable(x, y, w, h, label = "", fill = "#e7d5b4") {
+  function fieldHtml(label, prop, value, type = "text", extraClass = "") {
+    return `
+      <div class="field ${extraClass}">
+        <label for="prop-${escapeAttr(prop)}">${escapeHtml(label)}</label>
+        <input id="prop-${escapeAttr(prop)}" data-prop="${escapeAttr(prop)}" type="${escapeAttr(type)}" value="${escapeAttr(String(value))}">
+      </div>
+    `;
+  }
+
+  function createTable(x, y, w, h, label = "", fill = state.settings.drawFill || "#edbe4c") {
     return {
       id: makeId("table"),
       type: "table",
@@ -1511,24 +1996,39 @@
       h,
       rotation: 0,
       label,
+      textColor:state.settings.drawText || "#4e3721",
       fill
     };
   }
 
-  function createSeat(x, y, label = "S01", rotation = 0, w = 86, h = 48) {
-    return {
-      id: makeId("seat"),
-      type: "seat",
-      x,
-      y,
-      w,
-      h,
-      rotation,
-      label,
-      personId: null,
-      nameSize: 15,
-      nameColor: "#211f1b"
-    };
+  // A dragged row of chairs: evenly spaced along the drag, all facing across it.
+  const SEAT_ROW_SPACING = 136;
+
+  function seatRowPlan(start, end) {
+    const dx = end.x - start.x, dy = end.y - start.y;
+    const length = Math.hypot(dx, dy);
+    const count = Math.max(1, Math.min(60, Math.round(length / SEAT_ROW_SPACING) + 1));
+    const rotation = count > 1 ? Math.round(Math.atan2(dy, dx) * 180 / Math.PI) : 0;
+    const step = count > 1 ? { x: dx / (count - 1), y: dy / (count - 1) } : { x: 0, y: 0 };
+    const centers = [];
+    for (let index = 0; index < count; index++) centers.push({ x: start.x + step.x * index, y: start.y + step.y * index });
+    return { count, rotation, centers };
+  }
+
+  function createSeatRow(start, end) {
+    const plan = seatRowPlan(start, end);
+    const seats = plan.centers.map(center => {
+      const seat = createSeat(center.x - 60, center.y - 40, nextSeatLabel(), plan.rotation);
+      seat.fill = state.settings.drawFill;
+      state.items.push(seat);
+      return seat;
+    });
+    seats.forEach(orientSeatTowardNearestTable);
+    return seats;
+  }
+
+  function createSeat(x, y, label = "S01", rotation = 0, w = 120, h = 80) {
+    return { id:makeId("seat"), type:"seat", x,y,w,h,rotation,label, personId:null, nameSize:24, nameColor:state.settings.drawText || "#4e3721", textLayoutVersion:2 };
   }
 
   function createShape(x, y, w, h, kind = "rect") {
@@ -1548,23 +2048,16 @@
       h,
       rotation: 0,
       label: "",
-      fill: "#dbe8e6",
-      stroke: "#28766f"
+      fill: state.settings.drawFill || "#edbe4c",
+      textColor:state.settings.drawText || "#4e3721",
+      stroke: "#b58b49"
     };
   }
 
-  function createLabel(x, y, text = "标注", size = 24) {
-    return {
-      id: makeId("label"),
-      type: "label",
-      x,
-      y,
-      w: Math.max(60, String(text || "").length * size),
-      h: size + 16,
-      rotation: 0,
-      text,
-      size
-    };
+  function createLabel(x, y, text = "标注", size = 28) {
+    const lines = String(text).split("\n");
+    const family = state.settings.drawFont || "sans";
+    return { id:makeId("label"), type:"label", x,y, w:Math.max(60,...lines.map(line => measureText(line,size,family)))+20, h:lines.length*size*1.3+16, rotation:0, text, size, fontFamily:family, color:state.settings.drawText || "#4e3721", boxText:true };
   }
 
   function addHorizontalStrip(items, x, y, w, h, count, prefix, label) {
@@ -1801,15 +2294,18 @@
   function loadPeopleFromTextarea() {
     const parsed = parsePeopleText(els.peopleInput.value);
     if (!parsed.length) {
-      pulseButton(els.loadPeopleBtn, "无名单", "载入");
+      showToast("请先输入或粘贴参会人员姓名");
       return;
     }
     commitHistory();
+    const previousCount = state.people.length;
     appendPeople(parsed);
     els.peopleInput.value = "";
     renderAll();
     scheduleSave();
-    pulseButton(els.loadPeopleBtn, "已载入", "载入");
+    const added = state.people.length - previousCount;
+    if (added) ui.rosterImport.open = false;
+    showToast(added ? `已添加 ${added} 位参会人员${parsed.length > added ? "，重复人员已跳过" : ""}` : "这些人员已在名单中，无需重复添加", !!added);
   }
 
   function importPeopleFile() {
@@ -1826,7 +2322,8 @@
       appendPeople(parsed);
       renderAll();
       scheduleSave();
-      pulseButton(els.peopleFileBtn, "已导入", "文件");
+      ui.rosterImport.open = false;
+      showToast("名单文件已导入，重复人员已跳过", true);
     };
     reader.readAsText(file, "utf-8");
     els.peopleFile.value = "";
@@ -1841,6 +2338,7 @@
         id: makeId("person"),
         name: person.name,
         unit: person.unit || "",
+        kind: person.kind || (SeatMateCore.isOrganization(person.name) ? "organization" : "person"),
         assignedSeatId: null
       });
       existing.add(key);
@@ -1848,74 +2346,7 @@
   }
 
   function parsePeopleText(text) {
-    const raw = String(text || "").trim();
-    const lines = raw
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean);
-    if (!lines.length) return [];
-
-    if (lines.length === 1 && !looksLikeHeader(lines[0])) {
-      const tokens = splitLoosePeopleLine(lines[0]);
-      if (tokens.length > 1) {
-        return unique(tokens).map((name) => ({ name, unit: "" }));
-      }
-    }
-
-    const rows = lines.map(splitRow).filter((row) => row.length);
-    if (!rows.length) return [];
-
-    let startIndex = 0;
-    let nameIndex = 0;
-    const header = rows[0].map((cell) => cell.toLowerCase());
-    const headerNameIndex = header.findIndex((cell) => /姓名|名字|人员|name/.test(cell));
-    if (headerNameIndex >= 0) {
-      startIndex = 1;
-      nameIndex = headerNameIndex;
-    }
-
-    const people = [];
-    for (let index = startIndex; index < rows.length; index += 1) {
-      const row = rows[index];
-      if (row.length === 1) {
-        people.push({ name: row[0], unit: "" });
-        continue;
-      }
-      const name = row[nameIndex] || "";
-      if (!name.trim()) continue;
-      people.push({ name: name.trim(), unit: "" });
-    }
-
-    const seen = new Set();
-    return people.filter((person) => {
-      const key = person.name;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-  }
-
-  function looksLikeHeader(line) {
-    return /姓名|名字|人员|单位|部门|公司|机构|name|unit|dept|company/i.test(line);
-  }
-
-  function splitLoosePeopleLine(line) {
-    return String(line || "")
-      .replace(/[、，,;；|/]+/g, " ")
-      .split(/\s+/)
-      .map(cleanCell)
-      .filter(Boolean);
-  }
-
-  function splitRow(line) {
-    const source = line.replace(/^"|"$/g, "");
-    if (source.includes("\t")) return source.split("\t").map(cleanCell).filter(Boolean);
-    if (/[、，,;；|/]/.test(source)) return source.split(/[、，,;；|/]/).map(cleanCell).filter(Boolean);
-    return source.split(/\s+/).map(cleanCell).filter(Boolean);
-  }
-
-  function cleanCell(value) {
-    return String(value || "").trim().replace(/^"|"$/g, "");
+    return SeatMateCore.parseRoster(text);
   }
 
   function autoAssign() {
@@ -1925,11 +2356,14 @@
     const people = state.people
       .filter((person) => !person.assignedSeatId)
       .sort((a, b) => a.name.localeCompare(b.name, "zh-Hans-CN"));
-    if (!seats.length || !people.length) return;
+    if (!people.length) { showToast("所有人员都已安排座位"); return; }
+    if (!seats.length) { showToast("没有可用座位，请先添加座位或使用布局模板"); return; }
     commitHistory();
     people.slice(0, seats.length).forEach((person, index) => assignPersonToSeat(person.id, seats[index].id));
     renderAll();
     scheduleSave();
+    const remaining = Math.max(0, people.length - seats.length);
+    showToast(remaining ? `已安排 ${seats.length} 人，还有 ${remaining} 人待安排，请增加座位` : `已为 ${people.length} 位参会人员安排座位`, true);
   }
 
   function clearAssignments() {
@@ -1945,9 +2379,9 @@
     scheduleSave();
   }
 
-  function clearPeople() {
+  async function clearPeople() {
     if (!state.people.length) return;
-    if (!window.confirm("清空全部名单？座位上的人员也会移除。")) return;
+    if (!await openDialog("清空参会名单？", "所有参会人员及其座位分配将被移除，会场布局会保留。此操作可以撤销。", { confirm: "清空名单" })) return;
     commitHistory();
     state.people = [];
     getSeats().forEach((seat) => {
@@ -1955,6 +2389,34 @@
     });
     renderAll();
     scheduleSave();
+  }
+
+  // The name and the unit are edited as the two separate columns they are stored in.
+  async function editPerson(personId) {
+    const person = getPerson(personId);
+    if (!person) return;
+    const accepted = await openDialog("修改参会条目", "姓名单独一列，单位单独一列；单位留空时名单里显示为“—”。", {
+      confirm: "保存修改",
+      fields: [
+        { key: "name", label: "姓名 / 名称", value: person.name },
+        { key: "unit", label: "单位", value: person.unit || "" }
+      ]
+    });
+    if (!accepted) return;
+    const read = key => (ui.dialogContent.querySelector(`[data-field="${key}"]`)?.value || "").trim().slice(0, 200);
+    const name = read("name");
+    if (!name) { showToast("姓名不能为空，未做修改"); return; }
+    const unit = read("unit");
+    if (name === person.name && unit === (person.unit || "")) return;
+    commitHistory();
+    person.name = name;
+    person.unit = unit;
+    person.kind = SeatMateCore.isOrganization(name) ? "organization" : "person";
+    const seat = person.assignedSeatId ? getItem(person.assignedSeatId) : null;
+    if (seat) ensureSeatTextRoom(seat, seatPersonText(seat, person));
+    renderAll();
+    scheduleSave();
+    showToast(`已更新 ${name}`, true);
   }
 
   function removePerson(personId) {
@@ -1970,12 +2432,13 @@
     scheduleSave();
   }
 
-  function clearLayout() {
+  async function clearLayout() {
     if (!state.items.length && !state.draftImage) {
       pulseButton(els.clearLayoutBtn, "已为空", "清空布局");
       return;
     }
-    if (!window.confirm("确定清空当前布局和草稿底图？名单会保留，但座位分配会被清除。")) return;
+    if (!await openDialog("重新开始布局？", "当前桌椅、图形和草稿将被清除，参会名单会保留。此操作可以撤销。", { confirm: "清空布局" })) return;
+    dismissedEmpty = false;
     commitHistory();
     state.items = [];
     state.draftImage = null;
@@ -2018,7 +2481,7 @@
     scheduleSave();
   }
 
-  function assignPersonToSeat(personId, seatId) {
+  function assignPersonToSeat(personId, seatId, field = "name") {
     const person = getPerson(personId);
     const seat = getItem(seatId);
     if (!person || !seat || seat.type !== "seat") return;
@@ -2034,6 +2497,8 @@
 
     seat.personId = person.id;
     person.assignedSeatId = seat.id;
+    seat.showUnit = field === "unit" && Boolean(person.unit);
+    ensureSeatTextRoom(seat, seatPersonText(seat, person));
   }
 
   function unassignSeat(seatId) {
@@ -2076,39 +2541,38 @@
   }
 
   function cloneSelectedItemsForDrag(sourceItems = null) {
-    const items = sourceItems || getSelectedItems();
+    const items = sourceItems || movableItems(getSelectedIds());
     if (!items.length) return [];
     const groupMap = new Map();
+    const idMap = new Map(items.map(item => [item.id, makeId(item.type)]));
     return items.map((item) => {
       const copy = cloneItem(item);
-      copy.id = makeId(item.type);
+      copy.id = idMap.get(item.id);
       if (copy.groupId) {
         if (!groupMap.has(copy.groupId)) groupMap.set(copy.groupId, makeId("group"));
         copy.groupId = groupMap.get(copy.groupId);
       }
-      if (copy.type === "seat") copy.personId = null;
+      if (copy.type === "seat") { copy.personId = null; copy.tableId = idMap.get(item.tableId); }
       return copy;
     });
   }
 
   function rotateSelectionBy(degrees) {
-    const items = getSelectedItems();
-    if (!items.length) return;
+    const selected = getSelectedItems();
+    if (!selected.length) return;
     commitHistory();
-    const ids = items.map((item) => item.id);
-    const center = selectionCenter(ids);
-    rotateItems({
-      ids,
-      center,
-      origins: items.map(cloneItem)
-    }, (degrees * Math.PI) / 180);
-    normalizeState();
-    renderAll();
-    scheduleSave();
+    const items = movableItems(getSelectedIds());
+    const activeAction = { ids:items.map(item => item.id), center:selectionCenter(getSelectedIds()), origins:items.map(cloneItem) };
+    rotateItems(activeAction, degrees * Math.PI / 180);
+    const ids = new Set(selected.map(item => item.id));
+    selected.forEach(item => { if (item.type === "seat" && !ids.has(item.tableId)) delete item.tableId; });
+    selected.forEach(item => { updateDockedSeats(item.id); refitSeatText(item); });
+    renderAll(); scheduleSave();
   }
 
   function undo() {
     if (!history.length) return;
+    ui.toast.hidden = true;
     redoStack.push(JSON.stringify(state));
     state = JSON.parse(history.pop());
     normalizeState();
@@ -2118,6 +2582,7 @@
 
   function redo() {
     if (!redoStack.length) return;
+    ui.toast.hidden = true;
     history.push(JSON.stringify(state));
     state = JSON.parse(redoStack.pop());
     normalizeState();
@@ -2126,6 +2591,7 @@
   }
 
   function commitHistory() {
+    ui.toastUndo.hidden = true;
     history.push(JSON.stringify(state));
     if (history.length > 80) history.shift();
     redoStack = [];
@@ -2135,35 +2601,37 @@
   function exportJson() {
     saveLocal();
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json;charset=utf-8" });
-    downloadBlob(blob, `meeting-layout-${timestamp()}.json`);
+    downloadBlob(blob, `seatmate-layout-${timestamp()}.json`);
   }
 
   function importProjectFile() {
     const file = els.projectFile.files && els.projectFile.files[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       try {
-        const nextState = JSON.parse(String(reader.result || ""));
+        const nextState = SeatMateProject.parse(String(reader.result || ""));
+        if ((state.items.length || state.people.length || state.draftImage) && !await openDialog("导入这份布局？", "当前布局和名单将替换为文件中的内容。导入后可以撤销，恢复原有工作。", { confirm: "导入布局" })) return;
         commitHistory();
-        state = {
-          ...createEmptyState(),
-          ...nextState,
-          view: nextState.view || createEmptyState().view,
-          settings: { ...createEmptyState().settings, ...(nextState.settings || {}) }
-        };
+        state = nextState;
+        dismissedEmpty = false;
+        els.personSearch.value = "";
+        ui.rosterFilter.value = "all";
         normalizeState();
         renderAll();
         scheduleSave();
+        showToast("布局、名单及座位分配已恢复", true);
       } catch (error) {
-        window.alert("数据文件无法读取。");
+        showToast(error instanceof SyntaxError ? "文件不是有效的 JSON，当前布局未改变" : `${error.message}，当前布局未改变`);
       }
     };
+    reader.onerror = () => showToast("文件读取失败，请重新选择布局文件");
     reader.readAsText(file, "utf-8");
     els.projectFile.value = "";
   }
 
   function exportPng() {
+    els.exportPngBtn.disabled = true;
     const svgSource = buildExportSvg();
     const blob = new Blob([svgSource], { type: "image/svg+xml;charset=utf-8" });
     const url = URL.createObjectURL(blob);
@@ -2178,13 +2646,16 @@
       ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
       canvas.toBlob((pngBlob) => {
         URL.revokeObjectURL(url);
-        if (!pngBlob) return;
-        downloadBlob(pngBlob, `meeting-layout-${timestamp()}.png`);
+        els.exportPngBtn.disabled = false;
+        if (!pngBlob) { showToast("图片生成失败，请重试"); return; }
+        downloadBlob(pngBlob, `seatmate-layout-${timestamp()}.png`);
+        showToast("高清图片已生成（3200 × 2000）");
       }, "image/png");
     };
     image.onerror = () => {
       URL.revokeObjectURL(url);
-      window.alert("图片导出失败。");
+      els.exportPngBtn.disabled = false;
+      showToast("图片导出失败，请重试");
     };
     image.src = url;
   }
@@ -2192,98 +2663,35 @@
   function buildExportSvg() {
     const lines = [];
     for (let x = 0; x <= WORKSPACE.width; x += 100) {
-      lines.push(`<line x1="${x}" y1="0" x2="${x}" y2="${WORKSPACE.height}" stroke="#ece4d6" stroke-width="1"/>`);
+      lines.push(`<line x1="${x}" y1="0" x2="${x}" y2="${WORKSPACE.height}" stroke="#f2e7d4" stroke-width="1"/>`);
     }
     for (let y = 0; y <= WORKSPACE.height; y += 100) {
-      lines.push(`<line x1="0" y1="${y}" x2="${WORKSPACE.width}" y2="${y}" stroke="#ece4d6" stroke-width="1"/>`);
+      lines.push(`<line x1="0" y1="${y}" x2="${WORKSPACE.width}" y2="${y}" stroke="#f2e7d4" stroke-width="1"/>`);
     }
 
-    const itemMarkup = [...state.items].sort((a, b) => typeRank(a.type) - typeRank(b.type)).map((item) => {
-      if (item.type === "table") return exportTable(item);
-      if (item.type === "shape") return exportShape(item);
-      if (item.type === "seat") return exportSeat(item);
-      if (item.type === "label") return exportLabel(item);
-      return "";
-    }).join("");
+    const exportLayer = els.itemsLayer.cloneNode(true);
+    exportLayer.querySelectorAll(".selected-outline,.resize-handle,.rotate-handle,.rotate-stem").forEach(node => node.remove());
+    exportLayer.querySelectorAll(".is-drop-target").forEach(node => node.classList.remove("is-drop-target"));
+    const itemMarkup = new XMLSerializer().serializeToString(exportLayer);
 
     const seats = getSeats();
     const assigned = seats.filter((seat) => seat.personId).length;
 
     return `
       <svg xmlns="http://www.w3.org/2000/svg" width="${WORKSPACE.width}" height="${WORKSPACE.height}" viewBox="0 0 ${WORKSPACE.width} ${WORKSPACE.height}">
-        <rect width="100%" height="100%" fill="#fffaf0"/>
+        <rect width="100%" height="100%" fill="#fffcf5"/>
+        <style>text{font-family:"Microsoft YaHei","PingFang SC","Segoe UI",sans-serif}.table-rect{stroke:#b58f58;stroke-width:1.5}.table-label,.shape-label{text-anchor:middle;dominant-baseline:middle;font-weight:500}.seat-name,.seat-empty{text-anchor:middle;font-weight:600}.seat-shell{stroke-width:1.4}.seat-back{opacity:.9}.shape-fill{stroke-width:2}.layout-label{font-weight:600}.label-hitbox{fill:transparent;stroke:none}</style>
         ${lines.join("")}
         <text x="42" y="48" font-size="26" font-weight="800" fill="#24211d" font-family="Arial, Microsoft YaHei, sans-serif">${escapeXml(state.title || "未命名会议室")}</text>
-        <text x="42" y="78" font-size="15" font-weight="700" fill="#6e675c" font-family="Arial, Microsoft YaHei, sans-serif">${seats.length}个座位 · ${assigned}个已安排 · ${state.people.length}人名单</text>
+        <text x="42" y="78" font-size="15" font-weight="700" fill="#6e675c" font-family="Arial, Microsoft YaHei, sans-serif">${seats.length} 个座位 · ${assigned} 个已安排 · ${state.people.length} 位人员 / 单位</text>
         ${itemMarkup}
       </svg>
     `;
   }
 
-  function exportTable(item) {
-    return `
-      <g transform="${escapeAttr(transformFor(item))}">
-        <rect x="0" y="0" width="${item.w}" height="${item.h}" rx="8" fill="${escapeAttr(item.fill || "#e7d5b4")}" stroke="#6c5b40" stroke-width="2"/>
-        <text x="${item.w / 2}" y="${item.h / 2}" text-anchor="middle" dominant-baseline="middle" font-size="22" font-weight="800" fill="#3f382f" font-family="Arial, Microsoft YaHei, sans-serif">${escapeXml(item.label || "")}</text>
-      </g>
-    `;
-  }
-
-  function exportSeat(item) {
-    const person = item.personId ? getPerson(item.personId) : null;
-    const color = person ? colorForUnit(person.id || person.name) : "#fffdf8";
-    const stroke = person ? shade(color, -42) : "#52615b";
-    const top = person ? shade(color, -18) : "#e7dfd2";
-    const preferredSize = item.nameSize || 15;
-    const nameColor = item.nameColor || "#211f1b";
-    const label = person ? wrapText(person.name, item.w - 14, preferredSize, 2) : [item.label || "空位"];
-    const nameSize = person ? fitFontSize(label, item.w - 14, preferredSize, 8) : 12;
-    const startY = item.h / 2 - ((label.length - 1) * (nameSize + 2)) / 2;
-    const nameMarkup = label.map((line, index) => {
-      return `<text x="${item.w / 2}" y="${person ? startY + index * (nameSize + 2) : item.h / 2 + 4}" text-anchor="middle" dominant-baseline="middle" font-size="${person ? nameSize : 12}" font-weight="800" fill="${escapeAttr(person ? nameColor : "#211f1b")}" font-family="Arial, Microsoft YaHei, sans-serif">${escapeXml(line)}</text>`;
-    }).join("");
-    const textRotation = item.rotation ? ` transform="rotate(${-item.rotation} ${item.w / 2} ${item.h / 2})"` : "";
-    return `
-      <g transform="${escapeAttr(transformFor(item))}">
-        <rect x="3" y="11" width="${item.w - 6}" height="${item.h - 14}" rx="8" fill="${escapeAttr(color)}" stroke="${escapeAttr(stroke)}" stroke-width="2"/>
-        <rect x="8" y="${item.h - 16}" width="${item.w - 16}" height="13" rx="6" fill="${escapeAttr(top)}" opacity="0.9"/>
-        <path d="M ${item.w / 2 - 8} 7 L ${item.w / 2} 2 L ${item.w / 2 + 8} 7" fill="none" stroke="${escapeAttr(person ? shade(color, -55) : "#52615b")}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-        <g${textRotation}>
-          ${nameMarkup}
-        </g>
-      </g>
-    `;
-  }
-
-  function exportShape(item) {
-    const fill = escapeAttr(item.fill || "#dbe8e6");
-    const stroke = escapeAttr(item.stroke || "#28766f");
-    let shape = "";
-    if (item.kind === "circle") {
-      shape = `<ellipse cx="${item.w / 2}" cy="${item.h / 2}" rx="${item.w / 2}" ry="${item.h / 2}" fill="${fill}" stroke="${stroke}" stroke-width="2"/>`;
-    } else if (item.kind === "triangle") {
-      shape = `<polygon points="${item.w / 2},0 ${item.w},${item.h} 0,${item.h}" fill="${fill}" stroke="${stroke}" stroke-width="2"/>`;
-    } else {
-      shape = `<rect x="0" y="0" width="${item.w}" height="${item.h}" rx="${item.kind === "roundRect" ? Math.min(24, item.w / 4, item.h / 4) : 0}" fill="${fill}" stroke="${stroke}" stroke-width="2"/>`;
-    }
-    return `
-      <g transform="${escapeAttr(transformFor(item))}">
-        ${shape}
-        ${item.label ? `<text x="${item.w / 2}" y="${item.h / 2}" text-anchor="middle" dominant-baseline="middle" font-size="18" font-weight="800" fill="#31514d" font-family="Arial, Microsoft YaHei, sans-serif">${escapeXml(item.label)}</text>` : ""}
-      </g>
-    `;
-  }
-
-  function exportLabel(item) {
-    return `
-      <g transform="${escapeAttr(transformFor(item))}">
-        <text x="0" y="0" font-size="${item.size || 24}" font-weight="800" fill="#3b352c" font-family="Arial, Microsoft YaHei, sans-serif">${escapeXml(item.text || "")}</text>
-      </g>
-    `;
-  }
-
   function setViewBox() {
     els.stage.setAttribute("viewBox", `${state.view.x} ${state.view.y} ${state.view.w} ${state.view.h}`);
+    ui.zoomValue.textContent = `${Math.round(WORKSPACE.width / state.view.w * 100)}%`;
   }
 
   function fitView(save = true) {
@@ -2299,7 +2707,7 @@
   function zoomAtPoint(point, factor) {
     const oldView = state.view;
     const nextW = clamp(oldView.w * factor, 320, WORKSPACE.width * 2);
-    const nextH = clamp(oldView.h * factor, 220, WORKSPACE.height * 2);
+    const nextH = nextW * oldView.h / oldView.w;
     const relX = (point.x - oldView.x) / oldView.w;
     const relY = (point.y - oldView.y) / oldView.h;
     state.view = {
@@ -2327,23 +2735,32 @@
   }
 
   function saveLocal() {
+    clearTimeout(saveTimer);
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      ui.saveState.textContent = "已自动保存";
+      ui.saveState.classList.remove("is-error");
+      return true;
     } catch (error) {
-      console.warn("Unable to save layout", error);
+      ui.saveState.textContent = "保存失败";
+      ui.saveState.classList.add("is-error");
+      showToast("浏览器存储不可用或已满，请导出布局文件备份");
+      return false;
     }
   }
 
   function scheduleSave() {
+    ui.saveState.textContent = "正在保存…";
     clearTimeout(saveTimer);
-    saveTimer = window.setTimeout(saveLocal, 250);
+    saveTimer = window.setTimeout(saveLocal, 350);
   }
 
   function loadState() {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
+      // Layouts saved under the old name are picked up once and re-saved under the new one.
+      const raw = localStorage.getItem(STORAGE_KEY) || localStorage.getItem(LEGACY_STORAGE_KEY);
       if (!raw) return null;
-      return JSON.parse(raw);
+      return SeatMateProject.parse(raw);
     } catch (error) {
       return null;
     }
@@ -2368,15 +2785,23 @@
       item.w = Number(item.w) || (item.type === "seat" ? 86 : 160);
       item.h = Number(item.h) || (item.type === "seat" ? 48 : 80);
       item.rotation = Number(item.rotation) || 0;
-      if (item.type === "table") item.fill = item.fill || "#e7d5b4";
+      if (item.type === "label" && !item.boxText) {
+        item.x -= 8; item.y -= item.size || 24;
+        item.h = Math.max(item.h, (item.size || 24) * 1.3 + 16); item.boxText = true;
+      }
+      if (!state.themeVersion) {
+        const colors = { "#e3ebd8":"#ebce92", "#dbe8e6":"#efd39b", "#e2e9f0":"#e9ce9f", "#e5e9e0":"#e8d3a9", "#9dadc1":"#b69059", "#28766f":"#b58b49" };
+        ["fill","stroke"].forEach(prop => { if (colors[item[prop]]) item[prop] = colors[item[prop]]; });
+      }
+      if (item.type === "table") item.fill = item.fill || "#edcf95";
       if (item.type === "shape") {
         item.kind = item.kind || "rect";
-        item.fill = item.fill || "#dbe8e6";
-        item.stroke = item.stroke || "#28766f";
+        item.fill = item.fill || "#efd39b";
+        item.stroke = item.stroke || "#b58b49";
       }
       if (item.type === "seat") {
         if (item.personId === undefined) item.personId = null;
-        item.nameSize = Number(item.nameSize) || 15;
+        item.nameSize = Number(item.nameSize) || 24;
         item.nameColor = item.nameColor || "#211f1b";
       }
     });
@@ -2385,18 +2810,22 @@
       person.id = person.id || makeId("person");
       person.name = String(person.name || "未命名");
       person.unit = String(person.unit || "");
+      person.kind = person.kind || (SeatMateCore.isOrganization(person.name) ? "organization" : "person");
       person.assignedSeatId = null;
     });
 
     const peopleById = new Map(state.people.map((person) => [person.id, person]));
     getSeats().forEach((seat) => {
+      if (seat.tableId && (!getTables().some(table => table.id === seat.tableId) || !seat.dockSide)) delete seat.tableId;
       if (!seat.personId || !peopleById.has(seat.personId)) {
         seat.personId = null;
         return;
       }
       peopleById.get(seat.personId).assignedSeatId = seat.id;
+      if (!seat.textLayoutVersion) { seat.nameSize = Math.max(20, seat.nameSize); ensureSeatTextRoom(seat, peopleById.get(seat.personId).name); seat.textLayoutVersion = 2; }
     });
 
+    state.themeVersion = 2;
     state.selectedIds = unique(state.selectedIds).filter((id) => !!getItem(id));
     state.selectedId = state.selectedIds[0] || null;
   }
@@ -2473,7 +2902,10 @@
   }
 
   function nextSeatLabel() {
-    return `S${String(getSeats().length + 1).padStart(2, "0")}`;
+    const used = new Set(getSeats().map(seat => seat.label));
+    let number = 1;
+    while (used.has(`S${String(number).padStart(2, "0")}`)) number++;
+    return `S${String(number).padStart(2, "0")}`;
   }
 
   function makeId(prefix) {
@@ -2602,31 +3034,6 @@
     return `${chars.slice(0, Math.max(1, maxLength - 2)).join("")}..`;
   }
 
-  function wrapText(text, maxWidth, fontSize, maxLines) {
-    const chars = Array.from(String(text || "").trim());
-    if (!chars.length) return [""];
-    const perLine = Math.max(1, Math.floor(maxWidth / (fontSize * 0.62)));
-    const lines = [];
-    for (let index = 0; index < chars.length && lines.length < maxLines; index += perLine) {
-      lines.push(chars.slice(index, index + perLine).join(""));
-    }
-    if (chars.length > perLine * maxLines) {
-      const last = Array.from(lines[lines.length - 1]);
-      lines[lines.length - 1] = `${last.slice(0, Math.max(1, last.length - 1)).join("")}…`;
-    }
-    return lines;
-  }
-
-  function fitFontSize(lines, maxWidth, startSize, minSize) {
-    let size = startSize;
-    while (size > minSize) {
-      const tooWide = lines.some((line) => Array.from(line).length * size * 0.62 > maxWidth);
-      if (!tooWide) break;
-      size -= 1;
-    }
-    return size;
-  }
-
   function escapeHtml(value) {
     return String(value)
       .replace(/&/g, "&amp;")
@@ -2660,9 +3067,6 @@
   }
 
   function pulseButton(button, text, original) {
-    button.textContent = text;
-    window.setTimeout(() => {
-      button.textContent = original;
-    }, 1100);
+    showToast(text);
   }
 })();
